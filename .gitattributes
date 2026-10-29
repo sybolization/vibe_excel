@@ -1,0 +1,5 @@
+# 统一换行，保证「干净重跑」时产物不受编辑器差异影响（指南 §6.4）
+* text=auto eol=lf
+*.ps1 text eol=crlf
+*.cmd text eol=crlf
+*.bat text eol=crlf

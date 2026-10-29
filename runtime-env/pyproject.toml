@@ -1,0 +1,13 @@
+[project]
+name = "vibe-excel-runtime"
+version = "0.0.0"
+description = "Vibe Excel 数据运行时：Python + pandas + openpyxl + sqlite3。由 uv 管理，见 ADR-0001。"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+  "pandas>=2.2,<3",
+  "openpyxl>=3.1,<4",
+]
+
+[tool.uv]
+# 这是应用式环境，不是要发布的库。
+package = false

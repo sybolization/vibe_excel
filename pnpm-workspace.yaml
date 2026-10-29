@@ -1,0 +1,12 @@
+packages:
+  - "packages/*"
+  - "spikes/*"
+  - "apps/*"
+
+# pi 的依赖树里有需要 install 脚本的包。pnpm v11 起 onlyBuiltDependencies 被移除，
+# 改为 allowBuilds 映射；未列出的包默认视为未审查，strictDepBuilds 默认开启会直接报错。
+# 三项与上一次成功安装（2026-10-28）记录的 allowBuilds 一致。
+allowBuilds:
+  esbuild: true
+  protobufjs: true
+  "@google/genai": true
