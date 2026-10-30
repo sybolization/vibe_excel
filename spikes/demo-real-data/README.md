@@ -1,8 +1,13 @@
 # 真实数据演示台（临时脚手架）
 
+> **状态：已被 [packages/harness](../../packages/harness/src/index.ts) 接管（ADR-0006）。**
+> lifecycle 命令（setup/run/verify/publish/status/author）现在走 harness；
+> 这里保留两个仍然有用的东西：**独立核对脚本** [tools/verify_outputs.py](tools/verify_outputs.py)
+> 与[这次运行的结果](RESULTS.md)。harness 在同一份 `control.db` 上重跑 `analyze`，
+> 四个产出与该脚手架当时的产物 sha256 逐文件相同。
+
 > 这不是产品代码。它存在的目的是：用 `ground_true_excel/wenxin` 里的**真实 HR 导出文件**，
 > 把已经交付的 session / runtime 能力跑一遍，看看在真数据上是什么样子。
-> S2 的 `packages/harness` 会吸收这里的逻辑，届时整个目录删除。
 
 ## 为什么是一堆子命令
 

@@ -3,7 +3,8 @@
 业务人员用自然语言与 agent 共同建立和维护一个**可复用的数据处理程序**。Excel 是输入输出载体，不是内部计算模型；事实存放进 SQLite，代码与数据版本分开管理。
 
 当前进度：**M0 已完成**（[ADR-0001](docs/adr/0001-pi-integration.md)）；**S1/S3 已落地并有测试**；
-**真实 HR 数据第一次端到端跑通**（117,776 行入库、独立核对 23/23、合入 main，见 [RESULTS](spikes/demo-real-data/RESULTS.md)）。
+**真实 HR 数据第一次端到端跑通**（117,776 行入库、独立核对 23/23、合入 main，见 [RESULTS](spikes/demo-real-data/RESULTS.md)）；
+**S2 harness 已插件化落地**（cordis 宿主 + 9 个插件，见 [ADR-0006](docs/adr/0006-plugin-architecture.md)）。
 产品链路（探查 → 确认 → 页面）仍未开始。
 
 ## 三条贯穿全局的约束
@@ -19,10 +20,12 @@
 | `packages/contracts` | 跨层最小契约（品牌化 ID、运行状态、执行事件、限制） |
 | `packages/session` | S1：Program/Session/Run/DataRevision 持久化、草稿与发布、恢复视图 |
 | `packages/runtime` | S3：会话工作区、排他锁、SQLite 一致性快照、干净重跑 |
+| `packages/harness` | S2：插件化宿主（cordis）+ 9 个插件（store/workspace/exec/agent-pi/telemetry/stages/stage-molex/sessions/commands）+ CLI |
+| `vibe.plugins.yml` | 插件清单：一行一个插件，启动顺序由服务依赖决定 |
 | `spikes/m0-pi` | M0 验证程序：pi RPC 接入、独立 cwd、取消、会话恢复、环境白名单 |
-| `spikes/demo-real-data` | 真实数据演示台：入口契约、输入批次、干净执行、独立核对（S2 harness 会吸收） |
+| `spikes/demo-real-data` | 真实数据演示台（已被 harness 接管，保留作对照与核对脚本） |
 | `runtime-env` | 数据运行时：uv 管理的 Python 3.12 + pandas + openpyxl + xlrd + sqlite3 |
-| `docs/adr` | 架构决策记录（0001 M0 · 0002 控制面/版本 · 0003 串行化/快照/重跑 · 0004 草稿与发布 · 0005 执行单元） |
+| `docs/adr` | 架构决策记录（0001 M0 · 0002 控制面/版本 · 0003 串行化/快照/重跑 · 0004 草稿与发布 · 0005 执行单元 · 0006 插件架构） |
 
 尚未开始：`packages/harness`、`packages/eval`、`packages/growth`、`apps/web`。
 
@@ -53,18 +56,31 @@ node spikes/m0-pi/src/main.ts --all
 
 M0 的检查项各自独立、可单独重跑：`--only=spawn,python,cancel,resume,isolation`。
 
-真实数据演示（每条子命令只做一件事，状态全在 `<制品根>/control.db` 里）：
+Harness（S2，插件化；命令都由插件注册，加命令不用改入口）：
 
 ```powershell
-node spikes/demo-real-data/src/main.ts setup                       # 程序仓库 + 会话 + 输入批次（幂等）
-node spikes/demo-real-data/src/main.ts author --prompt=<文件> --label=import   # 需要 OPENCODE_API_KEY
-node spikes/demo-real-data/src/main.ts run    --stage=import       # 在干净 worktree 里按 commit 执行
-node spikes/demo-real-data/src/main.ts verify --stage=import       # 同 commit 跑两次比内容哈希
-node spikes/demo-real-data/src/main.ts publish --verify=<verify.json>
-node spikes/demo-real-data/src/main.ts status                      # 恢复视图
+node packages/harness/src/main.ts plugins            # 插件清单与加载状态（含依赖关系）
+node packages/harness/src/main.ts help               # 已注册的命令
+node packages/harness/src/main.ts setup              # 程序仓库 + 会话 + 输入批次（幂等）
+node packages/harness/src/main.ts run --stage=analyze    # 干净 worktree 里按 commit 执行
+node packages/harness/src/main.ts verify --stage=analyze # 同 commit 跑两次比内容哈希
+node packages/harness/src/main.ts publish --verify=<verify.json>
+node packages/harness/src/main.ts status             # 恢复视图（四个版本引用）
 ```
 
-`run` 与 `verify` **不需要**模型凭证：干净执行只带操作系统基础变量。
+只有 `author` 需要 `OPENCODE_API_KEY`；`run`/`verify` 不带任何模型凭证。
+清单环境变量：`VIBE_EXCEL_STORE` / `VIBE_EXCEL_PYTHON` / `VIBE_EXCEL_AS_OF` / `VIBE_EXCEL_GROUND_TRUTH`。
+
+真实数据演示（旧脚手架，保留作对照）：
+
+```powershell
+node spikes/demo-real-data/src/main.ts setup
+node spikes/demo-real-data/src/main.ts author --prompt=<文件> --label=import   # 需要 OPENCODE_API_KEY
+node spikes/demo-real-data/src/main.ts run    --stage=import
+node spikes/demo-real-data/src/main.ts verify --stage=import
+node spikes/demo-real-data/src/main.ts publish --verify=<verify.json>
+node spikes/demo-real-data/src/main.ts status
+```
 
 ## 怎么看一次运行到底做了什么
 
@@ -103,8 +119,9 @@ node spikes/m0-pi/node_modules/@earendil-works/pi-coding-agent/dist/cli.js `
 
 ## 已知限制
 
-完整清单见 [ADR-0001 §5](docs/adr/0001-pi-integration.md)。最关键的三条：
+完整清单见 [ADR-0001 §5](docs/adr/0001-pi-integration.md) 与 [ADR-0006 §8](docs/adr/0006-plugin-architecture.md)。最关键的四条：
 
 - 本地模拟环境**不是**安全沙箱：不保证 agent 无法越界读写、不保证断网、不保证凭证不可访问；
 - 取消只验证了直接子进程被打断，**未验证**后代进程全部回收；
-- 串行化只覆盖**同一会话**（会话锁 + 独立 `work/`），锁不跨机器；跨会话并发没有实测。
+- 串行化只覆盖**同一会话**（会话锁 + 独立 `work/`），锁不跨机器；跨会话并发没有实测；
+- 插件宿主用的是 **cordis 4.0.5（RC 阶段的外部依赖）**：没有热重载、没有分发包、没有插件级权限。

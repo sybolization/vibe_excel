@@ -1,0 +1,22 @@
+{
+  "name": "@vibe-excel/harness",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "S2：插件化 harness —— cordis 插件宿主 + 清单加载 + 内置插件（store/workspace/exec/agent/telemetry/runner）",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "types": "./src/index.ts",
+  "scripts": {
+    "start": "node src/main.ts"
+  },
+  "dependencies": {
+    "@deepseek-ai/cordis": "4.0.5",
+    "@earendil-works/pi-coding-agent": "1.4.0",
+    "@vibe-excel/contracts": "workspace:*",
+    "@vibe-excel/runtime": "workspace:*",
+    "@vibe-excel/session": "workspace:*",
+    "yaml": "2.9.0"
+  }
+}

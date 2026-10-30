@@ -1,0 +1,64 @@
+# Vibe Excel 的插件清单（形状照抄 DSH 的 cordis.patch.yml）
+#
+# 一行一个插件，`id` 是行的身份，`name` 是模块说明符（相对本文件或包名）。
+# 启动顺序**不**由这里的行序决定，而由服务依赖决定（inject / provide）。
+# 想临时关掉一个插件：给它加 `disabled: true`，或者写一个补丁层覆盖它。
+#
+# 插件自己的 config 全部由各插件的标准 schema 校验；校验不过会在加载阶段就报错，
+# 不会「先跑起来再悄悄用默认值」。
+
+plugins:
+  # —— 宿主能力 ——
+  - id: commands
+    name: ./packages/harness/src/plugins/commands.ts
+
+  - id: telemetry
+    name: ./packages/harness/src/plugins/telemetry.ts
+    config:
+      # 长任务的可观测性：事件逐条回显（静默即缺陷）
+      echo: true
+
+  - id: store
+    name: ./packages/harness/src/plugins/store.ts
+    config:
+      storeRoot: '${VIBE_EXCEL_STORE:-../vibe_excel-store}'
+
+  - id: workspace
+    name: ./packages/harness/src/plugins/workspace.ts
+
+  - id: exec
+    name: ./packages/harness/src/plugins/exec.ts
+    config:
+      python: '${VIBE_EXCEL_PYTHON:-runtime-env/.venv/Scripts/python.exe}'
+      timeoutMs: 900000
+
+  - id: agent-pi
+    name: ./packages/harness/src/plugins/agent-pi.ts
+    config:
+      provider: '${VIBE_EXCEL_PROVIDER:-opencode-go}'
+      model: '${VIBE_EXCEL_MODEL:-deepseek-v4.1-flash}'
+      apiKeyEnv: OPENCODE_API_KEY
+      timeoutMs: 1500000
+
+  # —— 业务插件 ——
+  # 阶段注册表 + 一个业务包。换业务流程 = 换/加一个这样的插件，编排器一行不改。
+  - id: stages
+    name: ./packages/harness/src/plugins/stages.ts
+
+  - id: stage-molex
+    name: ./packages/harness/src/plugins/stage-molex.ts
+
+  # —— 编排 ——
+  - id: sessions
+    name: ./packages/harness/src/plugins/sessions.ts
+    config:
+      program: molex-prep
+      asOf: '${VIBE_EXCEL_AS_OF:-2026-10-23}'
+      inputs:
+        dir: '${VIBE_EXCEL_GROUND_TRUTH:-ground_true_excel/wenxin}'
+        files:
+          - 所有员工_202610231434.XLS
+          - Position+-+Export+To+CSV_2026_10_20.xlsx
+          - 可用岗位表_2026-10-22.xlsx
+          - New Hire_202610231439.XLS
+          - Re Hire_202610231438.XLS
