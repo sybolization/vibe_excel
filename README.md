@@ -26,8 +26,9 @@
 | `spikes/demo-real-data` | 真实数据演示台（已被 harness 接管，保留作对照与核对脚本） |
 | `runtime-env` | 数据运行时：uv 管理的 Python 3.12 + pandas + openpyxl + xlrd + sqlite3 |
 | `docs/adr` | 架构决策记录（0001 M0 · 0002 控制面/版本 · 0003 串行化/快照/重跑 · 0004 草稿与发布 · 0005 执行单元 · 0006 插件架构） |
+| `docs/ARCHITECTURE.md` | **当前架构**：三层代码、服务图、版本模型、一次 run 的时序、落盘布局、边界 |
 
-尚未开始：`packages/harness`、`packages/eval`、`packages/growth`、`apps/web`。
+尚未开始：`packages/eval`、`packages/growth`、`apps/web`。
 
 ## 一次性准备
 
