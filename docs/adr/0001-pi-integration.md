@@ -51,6 +51,8 @@ pi 提供两种真实形态（`docs/rpc.md`）：
 | pandas / openpyxl | 2.3.3 / 3.1.5 | `runtime-env/uv.lock` |
 | SQLite（Python stdlib） | 3.53.1 | 实测 |
 
+**模型路线（2026-10-30 确认）**：长期采用 `opencode-go` / `deepseek-v4.1-flash`。原因是本机直连 `api.deepseek.com` 的 TLS 握手被拦（见 §5 第 1 条），而该 provider 走的是本机已有凭证。切换模型只需改 `--provider` / `--model` 两个参数，不写死在代码里，也不依赖用户全局 `settings.json`。
+
 三条容易踩的事实：
 
 1. **上一轮残留的依赖是错配的**：`pi-coding-agent@1.2.0` 与其它包 `1.4.0` 混装，`pi-ai` 还同时存在 1.2.0 与 1.4.0 两份。已重装统一到 1.4.0。
@@ -179,4 +181,8 @@ WSL 未安装（`wsl -l -v` 报未安装），因此运行平台是原生 Window
 10. **Windows 上的 §8 限制条款尚未写成文。** S3 的 README 需要按本机实测重写「不能保证」清单，本轮只确认了「原生 Windows + Git Bash」这个前提。
 11. **同一输入的多次运行结论不一致**（§4.3 已给出四次运行的证据）。这意味着：正确性不能靠「跑一次看着对」，必须靠独立 verifier + 用户确认；而 §10 的指标清单里缺少「多次运行一致性」这一项。
 12. **会话文件的完整性依赖 pi 的写入时机。** 本轮都在 `client.stop()` 之后才导出 HTML；如果进程被强杀，会话文件是否仍完整**未验证**——这直接影响 §3.2「进程重启后恢复到确定节点」能不能成立。
+13. **工作区写入约束：已调研，本轮决定不做。** 结论有三条，供后续决策复用：
+    - pi 的 `sandbox` 扩展**在 Windows 上不可用**：源码 `examples/extensions/sandbox/index.ts:251-256` 在 `platform` 不是 `darwin`/`linux` 时直接把 `sandboxEnabled` 置 false；其底层 `@anthropic-ai/sandbox-runtime`（v0.0.81）包装的是 macOS `sandbox-exec` 与 Linux `bubblewrap`，Windows 无同形状原语。
+    - 可行但**不完整**的做法是扩展 `tool_call` 钩子拦截 `write`/`edit` 的越界路径（`examples/extensions/protected-paths.ts` 就是这个形状）；它**拦不住 `bash` 及任何子进程**，因此只能算「防手滑」，不能当安全边界。
+    - 真边界只有四条路：WSL2、容器、Windows 原生令牌/AppContainer、独立用户账户 + ACL。各自代价见会话记录；指南 §3.3 明确首版不引入容器。
 
