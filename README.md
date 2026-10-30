@@ -48,6 +48,31 @@ node spikes/m0-pi/src/main.ts --all
 
 M0 的检查项各自独立、可单独重跑：`--only=spawn,python,cancel,resume,isolation`。
 
+## 怎么看一次运行到底做了什么
+
+每次检查在制品根留下一个 run 目录，固定四类产物：
+
+| 文件 | 内容 | 用途 |
+|---|---|---|
+| `events.jsonl` | RPC 原始事件流，逐条不加工（有体积上限） | 机器可查的全部事实 |
+| `timeline.txt` | 折叠掉流式增量的时间线（时间 / 类型 / 工具名 / 摘要） | 人一眼看完它做了什么 |
+| `sessions/*.jsonl` | pi 自己的会话文件 | 可 `--continue` 恢复，可审计 |
+| `*.html` | 会话经 `pi --export` 导出的页面 | 含每条消息的 token 与成本 |
+
+例：一次真实导入（986 条事件 / 8 次工具调用 / 59 秒 / $0.0033）在
+`<制品根>\m0\python-<时间戳>\` 下，时间线只有 16 KiB，剔除的是 901 条流式增量。
+
+```powershell
+# 看时间线
+Get-Content "<制品根>\m0\python-*\timeline.txt" -Encoding utf8
+
+# 重新导出 HTML
+node spikes/m0-pi/node_modules/@earendil-works/pi-coding-agent/dist/cli.js `
+  --export <会话>.jsonl <输出>.html
+```
+
+注意：`events.jsonl` 是**事实**，`timeline.txt` 里的摘要是**人写的压缩**。两者冲突时以原始事件流为准。
+
 ## 数据与制品的边界
 
 代码进 Git，**数据不进**：

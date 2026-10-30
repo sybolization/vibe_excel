@@ -5,7 +5,8 @@
  * 也不新增模型可调用的工具。这里做的只有「进程、cwd、环境、事件」。
  */
 
-import { readFileSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
+import { createWriteStream, readFileSync, type WriteStream } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -128,7 +129,14 @@ export function createClient(cfg: PiSessionConfig): RpcClient {
 /* ------------------------------------------------------------------ *
  * 事件记录
  *
+ * 三份产物，各有用途：
+ *   events.jsonl  —— RPC 原始事件流，逐条落盘，不加工（体积有上限）
+ *   timeline.txt  —— 给人和模型看的压缩时间线（跳过流式 delta）
+ *   <session>.html —— pi 自己的会话导出，含每条消息的 token 与成本
+ *
  * 只记录观测到的事实：事件类型、序号、时间。不做任何"进度百分比"之类的推断。
+ * 注意：字段抽取（tool/role/result…）是**防御性**的，事件形状没有对外契约，
+ * 所以取不到就退回整条 JSON 截断，不假设一定有某个字段。
  * ------------------------------------------------------------------ */
 
 export interface EventFact {
@@ -137,18 +145,52 @@ export interface EventFact {
   type: string;
 }
 
+const truncate = (value: string, max: number): string =>
+  value.length <= max ? value : `${value.slice(0, max)}…`;
+
+/** 从一条事件里抠出人能读的要点；失败就退回截断的 JSON。 */
+function brief(raw: unknown): string {
+  if (raw === null || typeof raw !== 'object') return truncate(String(raw), 160);
+  const obj = raw as Record<string, unknown>;
+  const parts: string[] = [];
+
+  const toolName = obj['toolName'] ?? obj['tool'] ?? (obj['type'] === 'tool_execution_start' ? obj['name'] : undefined);
+  if (typeof toolName === 'string') parts.push(`tool=${toolName}`);
+  if (typeof obj['role'] === 'string') parts.push(`role=${obj['role'] as string}`);
+  if (typeof obj['isError'] === 'boolean') parts.push(`isError=${String(obj['isError'])}`);
+
+  const payload = obj['result'] ?? obj['output'] ?? obj['input'] ?? obj['text'];
+  if (typeof payload === 'string' && payload.trim().length > 0) {
+    parts.push(`«${truncate(payload.replace(/\s+/g, ' ').trim(), 200)}»`);
+  } else if (payload !== undefined) {
+    parts.push(`«${truncate(JSON.stringify(payload), 200)}»`);
+  }
+
+  if (parts.length === 0) parts.push(truncate(JSON.stringify(raw), 180));
+  return parts.join(' ');
+}
+
 export class EventRecorder {
   readonly facts: EventFact[] = [];
   /** 发现的事件类型 → 次数。用于给报告提供真实的事件分类，而不是猜。 */
   readonly typeCounts: Record<string, number> = {};
   private seq = 0;
-  private readonly raw: string[] = [];
+  private readonly timeline: string[] = [];
+  private readonly tools = new Set<string>();
+  private stream: WriteStream | null = null;
+  private bytes = 0;
+  private maxBytes = 64 * 1024 * 1024;
+  private skippedDeltas = 0;
   private readonly sink: ((fact: EventFact) => void) | undefined;
-  private readonly maxRaw: number;
 
-  constructor(sink?: (fact: EventFact) => void, maxRaw = 400) {
+  constructor(sink?: (fact: EventFact) => void) {
     this.sink = sink;
-    this.maxRaw = maxRaw;
+  }
+
+  /** 把原始事件流逐条写到文件，必须在 start() 之前调用，否则会漏掉开头的事件。 */
+  attach(filePath: string, maxBytes = 64 * 1024 * 1024): void {
+    this.maxBytes = maxBytes;
+    this.stream = createWriteStream(filePath, { flags: 'a' });
   }
 
   handle(raw: unknown): void {
@@ -159,28 +201,74 @@ export class EventRecorder {
     const fact: EventFact = { seq: this.seq++, at: new Date().toISOString(), type };
     this.facts.push(fact);
     this.typeCounts[type] = (this.typeCounts[type] ?? 0) + 1;
-    if (this.raw.length < this.maxRaw) {
-      const line = JSON.stringify(raw);
-      // 原始事件有界保存，避免把大对象反复塞进日志。
-      this.raw.push(line.length > 2000 ? `${line.slice(0, 2000)}…<truncated>` : line);
+
+    const line = JSON.stringify(raw);
+    this.bytes += line.length;
+    if (this.stream && this.bytes <= this.maxBytes) {
+      this.stream.write(`${line}\n`);
     }
+
+    // 工具名在**每条事件**上累计，不能只扫内存里截断过的那一小段，
+    // 否则会漏掉运行后段才出现的 write / edit，把「没有自定义工具」这个证据削弱。
+    if (typeof raw === 'object' && raw !== null) {
+      const obj = raw as Record<string, unknown>;
+      const direct = obj['toolName'] ?? (type === 'tool_execution_start' ? obj['name'] : undefined);
+      if (typeof direct === 'string') this.tools.add(direct);
+      const message = obj['message'];
+      if (typeof message === 'object' && message !== null) {
+        const nested = (message as Record<string, unknown>)['toolName'];
+        if (typeof nested === 'string') this.tools.add(nested);
+      }
+    }
+
+    // 流式 token delta 不进时间线，否则 1000 条里 1000 条都是它。
+    if (type === 'message_update') {
+      this.skippedDeltas += 1;
+    } else {
+      this.timeline.push(`${String(fact.seq).padStart(4, '0')}  ${fact.at}  ${type.padEnd(22)}  ${brief(raw)}`);
+    }
+
     this.sink?.(fact);
   }
 
-  get rawLines(): readonly string[] {
-    return this.raw;
+  get getTruncated(): boolean {
+    return this.bytes > this.maxBytes;
   }
 
-  /** 把事件流里出现的所有工具名抠出来，用于证明"没有新增自定义工具"。 */
+  /** 时间线正文。末尾附一行统计，说明哪些内容被折叠了。 */
+  timelineLines(): string[] {
+    return [
+      ...this.timeline,
+      '',
+      `# 共 ${this.facts.length} 条事件，类型 ${Object.keys(this.typeCounts).length} 种；`
+        + `折叠 ${this.skippedDeltas} 条 message_update 流式增量；`
+        + `原始流 ${(this.bytes / 1024).toFixed(1)} KiB${this.getTruncated ? '（已超上限截断）' : ''}`,
+      `# 类型分布：${Object.entries(this.typeCounts).map(([k, v]) => `${k}=${v}`).join(' ')}`,
+    ];
+  }
+
+  async close(): Promise<void> {
+    const stream = this.stream;
+    this.stream = null;
+    if (!stream) return;
+    await new Promise<void>((done) => stream.end(() => done()));
+  }
+
+  /** 事件流里出现过的所有工具名。用于证明"只用了 pi 内置工具，没有新增自定义工具"。 */
   toolNames(): string[] {
-    const names = new Set<string>();
-    for (const line of this.raw) {
-      const re = /"(?:tool|toolName|name)":"([a-z_]+)"/g;
-      let m: RegExpExecArray | null;
-      while ((m = re.exec(line)) !== null) {
-        if (m[1]) names.add(m[1]);
-      }
-    }
-    return [...names].sort();
+    return [...this.tools].sort();
+  }
+}
+
+/** 用 pi 自带的导出功能把会话文件变成可读 HTML；失败不影响主流程。 */
+export function exportSessionHtml(cliPath: string, sessionFile: string, outFile: string): boolean {
+  try {
+    execFileSync(process.execPath, [cliPath, '--export', sessionFile, outFile], {
+      stdio: 'ignore',
+      timeout: 120_000,
+    });
+    return true;
+  } catch {
+    return false;
   }
 }

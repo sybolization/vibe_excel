@@ -9,7 +9,7 @@ import { mkdir, readdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
 import type { Log } from './log.ts';
-import { createClient, EventRecorder, PROVIDER_KEY_ENV, withSanitizedEnv } from './pi.ts';
+import { createClient, EventRecorder, exportSessionHtml, PROVIDER_KEY_ENV, withSanitizedEnv } from './pi.ts';
 
 export interface CheckContext {
   log: Log;
@@ -54,21 +54,79 @@ function bashText(result: unknown): string {
   return JSON.stringify(result);
 }
 
+/**
+ * 检查库结构与「来源行去向」。
+ *
+ * 为什么不能简单把各表行数求和：模型可能额外建记账表（例如 import_log），
+ * 那不是业务记录却会被算进去。指南 §5.3 真正要求的是
+ * 「每个候选业务来源行都有明确去向」，所以判据是**来源行覆盖**：
+ * 找出带来源坐标列的表，看每个来源行是否恰好落在一个去向里。
+ */
 const SQLITE_INSPECT = `
-import json, sqlite3, sys
+import json, re, sqlite3, sys
 db = sys.argv[1]
 con = sqlite3.connect(db)
 tables = [r[0] for r in con.execute(
     "select name from sqlite_master where type='table' and name not like 'sqlite_%' order by name")]
-counts = {t: con.execute('select count(*) from "' + t + '"').fetchone()[0] for t in tables}
-print(json.dumps({"tables": counts}))
+pat = re.compile(r'(source_?row|row_?(no|num|index)|source_?line|line_?no)', re.I)
+counts, schema, destinations = {}, {}, {}
+for t in tables:
+    cols = [d[1] for d in con.execute('pragma table_info("%s")' % t)]
+    schema[t] = cols
+    counts[t] = con.execute('select count(*) from "%s"' % t).fetchone()[0]
+    rowcol = next((c for c in cols if pat.search(c)), None)
+    if rowcol is not None:
+        for (v,) in con.execute('select distinct "%s" from "%s" order by 1' % (rowcol, t)):
+            destinations.setdefault(str(v), []).append(t)
+print(json.dumps({"counts": counts, "schema": schema, "destinations": destinations}, ensure_ascii=False))
 `;
 
-/** 读取 sqlite 里每张表的行数；库不存在时返回空。 */
-function inspectDb(pythonPath: string, dbPath: string): Record<string, number> {
-  if (!existsSync(dbPath)) return {};
+interface DbInspection {
+  counts: Record<string, number>;
+  schema: Record<string, string[]>;
+  destinations: Record<string, string[]>;
+}
+
+/** 读取库结构；库不存在时返回空结构。 */
+function inspectDb(pythonPath: string, dbPath: string): DbInspection {
+  if (!existsSync(dbPath)) return { counts: {}, schema: {}, destinations: {} };
   const raw = runPython(pythonPath, SQLITE_INSPECT, [dbPath.replace(/\\/g, '/')]);
-  return (JSON.parse(raw) as { tables: Record<string, number> }).tables;
+  return JSON.parse(raw) as DbInspection;
+}
+
+/**
+ * 收尾：关闭事件流、写时间线、把会话导出成 HTML。
+ *
+ * 必须在 client.stop() **之后**调用，否则会话文件还没写完整。
+ */
+async function finishTrace(ctx: CheckContext, recorder: EventRecorder): Promise<Record<string, unknown>> {
+  await recorder.close();
+  const timelinePath = join(ctx.runDir, 'timeline.txt');
+  await writeFile(timelinePath, `${recorder.timelineLines().join('\n')}\n`, 'utf8');
+
+  const sessionDir = join(ctx.runDir, 'sessions');
+  const files = await readdir(sessionDir).catch(() => [] as string[]);
+  const html: string[] = [];
+  for (const name of files.filter((f) => f.endsWith('.jsonl'))) {
+    const out = join(ctx.runDir, `${name.replace(/\.jsonl$/, '')}.html`);
+    if (exportSessionHtml(ctx.cli, join(sessionDir, name), out)) html.push(out);
+  }
+
+  return {
+    trace: {
+      events: join(ctx.runDir, 'events.jsonl'),
+      timeline: timelinePath,
+      sessions: files.map((f) => join(sessionDir, f)),
+      html,
+    },
+  };
+}
+
+/** 每项检查都开一个独立会话目录，让 pi 自己写可恢复、可导出的会话文件。 */
+async function sessionDirFor(ctx: CheckContext): Promise<string> {
+  const dir = join(ctx.runDir, 'sessions');
+  await mkdir(dir, { recursive: true });
+  return dir;
 }
 
 /* ================================================================== *
@@ -82,13 +140,14 @@ export async function checkSpawn(ctx: CheckContext): Promise<CheckResult> {
   await ctx.log.step(`启动 pi（cwd=${work}）`);
 
   const recorder = new EventRecorder();
+  recorder.attach(join(ctx.runDir, 'events.jsonl'));
   const client = createClient({
     cliPath: ctx.cli,
     cwd: work,
     agentDir,
     provider: ctx.provider,
     model: ctx.model,
-    args: ['--no-session'],
+    args: ['--session-dir', await sessionDirFor(ctx)],
   });
   const facts: Record<string, unknown> = {};
   try {
@@ -111,6 +170,8 @@ export async function checkSpawn(ctx: CheckContext): Promise<CheckResult> {
     const hasEvents = recorder.facts.length > 0;
 
     facts.stderrBytes = client.getStderr().length;
+    await client.stop().catch(() => undefined);
+    Object.assign(facts, await finishTrace(ctx, recorder));
     return {
       name: 'spawn',
       ok: cwdOk && hasEvents,
@@ -145,13 +206,14 @@ export async function checkPython(ctx: CheckContext): Promise<CheckResult> {
   await ctx.log.step('已准备 input.csv（5 行，含文本日期与部门别名）');
 
   const recorder = new EventRecorder();
+  recorder.attach(join(ctx.runDir, 'events.jsonl'));
   const client = createClient({
     cliPath: ctx.cli,
     cwd: work,
     agentDir,
     provider: ctx.provider,
     model: ctx.model,
-    args: ['--no-session'],
+    args: ['--session-dir', await sessionDirFor(ctx)],
   });
   const facts: Record<string, unknown> = {};
   try {
@@ -181,14 +243,23 @@ export async function checkPython(ctx: CheckContext): Promise<CheckResult> {
     facts.toolNames = recorder.toolNames();
 
     const dbPath = join(work, 'biz.db');
-    const tables = inspectDb(ctx.pythonPath, dbPath);
+    const inspection = inspectDb(ctx.pythonPath, dbPath);
     facts.dbExists = existsSync(dbPath);
-    facts.dbTables = tables;
+    facts.dbTables = inspection.counts;
+    facts.dbSchema = inspection.schema;
+    facts.destinations = inspection.destinations;
 
-    // 守恒：staging + quarantine 的行数之和应等于 5 条来源行。
-    const total = Object.values(tables).reduce((a, b) => a + b, 0);
-    facts.totalImported = total;
+    // 守恒：每个来源行必须恰好有一个去向（staging 或 quarantine），
+    // 不能丢失，也不能同时进两张表。
+    const coveredRows = Object.keys(inspection.destinations);
+    const multiDestination = Object.entries(inspection.destinations)
+      .filter(([, where]) => where.length > 1)
+      .map(([row]) => row);
+    facts.distinctSourceRows = coveredRows.length;
+    facts.multiDestinationRows = multiDestination;
     facts.sourceRows = 5;
+
+    const conservationOk = coveredRows.length === 5 && multiDestination.length === 0;
 
     try {
       const stats = await client.getSessionStats();
@@ -197,11 +268,15 @@ export async function checkPython(ctx: CheckContext): Promise<CheckResult> {
       facts.sessionStatsError = String(error);
     }
 
+    await client.stop().catch(() => undefined);
+    Object.assign(facts, await finishTrace(ctx, recorder));
+
     return {
       name: 'python',
-      ok: facts.dbExists === true && total === 5,
+      ok: facts.dbExists === true && conservationOk,
       detail: facts.dbExists
-        ? `biz.db 表=${JSON.stringify(tables)}，来源行 5 → 落地 ${total}`
+        ? `表=${JSON.stringify(inspection.counts)}；来源行覆盖 ${coveredRows.length}/5`
+          + (multiDestination.length > 0 ? `，重复去向 ${multiDestination.join(',')}` : '')
         : 'biz.db 未生成',
       facts,
     };
@@ -224,13 +299,14 @@ export async function checkCancel(ctx: CheckContext): Promise<CheckResult> {
 
   const marker = join(work, 'cancel-finished.txt').replace(/\\/g, '/');
   const recorder = new EventRecorder();
+  recorder.attach(join(ctx.runDir, 'events.jsonl'));
   const client = createClient({
     cliPath: ctx.cli,
     cwd: work,
     agentDir,
     provider: ctx.provider,
     model: ctx.model,
-    args: ['--no-session'],
+    args: ['--session-dir', await sessionDirFor(ctx)],
   });
   const facts: Record<string, unknown> = { marker };
   try {
@@ -258,6 +334,9 @@ export async function checkCancel(ctx: CheckContext): Promise<CheckResult> {
     await sleep(10_000);
     facts.markerExists = existsSync(marker);
 
+    await client.stop().catch(() => undefined);
+    Object.assign(facts, await finishTrace(ctx, recorder));
+
     return {
       name: 'cancel',
       ok: facts.markerExists === false,
@@ -283,6 +362,8 @@ export async function checkResume(ctx: CheckContext): Promise<CheckResult> {
   await mkdir(sessionDir, { recursive: true });
 
   const facts: Record<string, unknown> = { sessionDir };
+  const recorder = new EventRecorder();
+  recorder.attach(join(ctx.runDir, 'events.jsonl'));
   const base = {
     cliPath: ctx.cli,
     cwd: work,
@@ -294,6 +375,7 @@ export async function checkResume(ctx: CheckContext): Promise<CheckResult> {
   // 第一轮：把数字告诉它。
   const first = createClient({ ...base, args: ['--session-dir', sessionDir, '--name', 'm0-resume'] });
   try {
+    first.onEvent((event) => recorder.handle(event));
     await first.start();
     await ctx.log.step('第一轮：让它记住 4242');
     await first.promptAndWait('请记住这个数字：4242。现在只回复 OK 两个字母。', undefined, 180_000);
@@ -309,12 +391,15 @@ export async function checkResume(ctx: CheckContext): Promise<CheckResult> {
   // 第二轮：全新进程，--continue 恢复同一会话。
   const second = createClient({ ...base, args: ['--session-dir', sessionDir, '--continue'] });
   try {
+    second.onEvent((event) => recorder.handle(event));
     await second.start();
     await ctx.log.step('第二轮：新进程 --continue，问它那个数字');
     await second.promptAndWait('我刚才让你记住的数字是多少？只回答数字本身。', undefined, 180_000);
     const reply = await second.getLastAssistantText().catch(() => null);
     facts.secondReply = reply;
     const recovered = typeof reply === 'string' && reply.includes('4242');
+    await second.stop().catch(() => undefined);
+    Object.assign(facts, await finishTrace(ctx, recorder));
     return {
       name: 'resume',
       ok: recovered,
@@ -340,15 +425,18 @@ export async function checkIsolation(ctx: CheckContext): Promise<CheckResult> {
   process.env[SENTINEL] = 'canary-should-not-leak';
 
   const facts: Record<string, unknown> = {};
+  const recorder = new EventRecorder();
+  recorder.attach(join(ctx.runDir, 'events.jsonl'));
   const client = createClient({
     cliPath: ctx.cli,
     cwd: work,
     agentDir,
     provider: ctx.provider,
     model: ctx.model,
-    args: ['--no-session'],
+    args: ['--session-dir', await sessionDirFor(ctx)],
   });
   try {
+    client.onEvent((event) => recorder.handle(event));
     // 只在 spawn 期间收紧环境：子进程冻结的是那一刻的 env。
     await withSanitizedEnv(async () => {
       await client.start();
@@ -380,6 +468,8 @@ export async function checkIsolation(ctx: CheckContext): Promise<CheckResult> {
     facts.isolatedReply = reply;
 
     const ok = facts.sentinelLeaked === false && facts.providerKeyVisible === true && typeof reply === 'string' && reply.length > 0;
+    await client.stop().catch(() => undefined);
+    Object.assign(facts, await finishTrace(ctx, recorder));
     return {
       name: 'isolation',
       ok,
