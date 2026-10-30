@@ -2,7 +2,9 @@
 
 业务人员用自然语言与 agent 共同建立和维护一个**可复用的数据处理程序**。Excel 是输入输出载体，不是内部计算模型；事实存放进 SQLite，代码与数据版本分开管理。
 
-当前进度：**M0（最小技术验证）已完成**，结论与缺口见 [ADR-0001：pi 接入形态与 M0 技术基线](docs/adr/0001-pi-integration.md)。
+当前进度：**M0 已完成**（[ADR-0001](docs/adr/0001-pi-integration.md)）；**S1/S3 已落地并有测试**；
+**真实 HR 数据第一次端到端跑通**（117,776 行入库、独立核对 23/23、合入 main，见 [RESULTS](spikes/demo-real-data/RESULTS.md)）。
+产品链路（探查 → 确认 → 页面）仍未开始。
 
 ## 三条贯穿全局的约束
 
@@ -18,8 +20,9 @@
 | `packages/session` | S1：Program/Session/Run/DataRevision 持久化、草稿与发布、恢复视图 |
 | `packages/runtime` | S3：会话工作区、排他锁、SQLite 一致性快照、干净重跑 |
 | `spikes/m0-pi` | M0 验证程序：pi RPC 接入、独立 cwd、取消、会话恢复、环境白名单 |
-| `runtime-env` | 数据运行时：uv 管理的 Python 3.12 + pandas + openpyxl + sqlite3 |
-| `docs/adr` | 架构决策记录 |
+| `spikes/demo-real-data` | 真实数据演示台：入口契约、输入批次、干净执行、独立核对（S2 harness 会吸收） |
+| `runtime-env` | 数据运行时：uv 管理的 Python 3.12 + pandas + openpyxl + xlrd + sqlite3 |
+| `docs/adr` | 架构决策记录（0001 M0 · 0002 控制面/版本 · 0003 串行化/快照/重跑 · 0004 草稿与发布 · 0005 执行单元） |
 
 尚未开始：`packages/harness`、`packages/eval`、`packages/growth`、`apps/web`。
 
@@ -49,6 +52,19 @@ node spikes/m0-pi/src/main.ts --all
 ```
 
 M0 的检查项各自独立、可单独重跑：`--only=spawn,python,cancel,resume,isolation`。
+
+真实数据演示（每条子命令只做一件事，状态全在 `<制品根>/control.db` 里）：
+
+```powershell
+node spikes/demo-real-data/src/main.ts setup                       # 程序仓库 + 会话 + 输入批次（幂等）
+node spikes/demo-real-data/src/main.ts author --prompt=<文件> --label=import   # 需要 OPENCODE_API_KEY
+node spikes/demo-real-data/src/main.ts run    --stage=import       # 在干净 worktree 里按 commit 执行
+node spikes/demo-real-data/src/main.ts verify --stage=import       # 同 commit 跑两次比内容哈希
+node spikes/demo-real-data/src/main.ts publish --verify=<verify.json>
+node spikes/demo-real-data/src/main.ts status                      # 恢复视图
+```
+
+`run` 与 `verify` **不需要**模型凭证：干净执行只带操作系统基础变量。
 
 ## 怎么看一次运行到底做了什么
 
@@ -91,4 +107,4 @@ node spikes/m0-pi/node_modules/@earendil-works/pi-coding-agent/dist/cli.js `
 
 - 本地模拟环境**不是**安全沙箱：不保证 agent 无法越界读写、不保证断网、不保证凭证不可访问；
 - 取消只验证了直接子进程被打断，**未验证**后代进程全部回收；
-- 并发写入同一数据库文件**未验证**，当前实现没有任何串行化机制。
+- 串行化只覆盖**同一会话**（会话锁 + 独立 `work/`），锁不跨机器；跨会话并发没有实测。

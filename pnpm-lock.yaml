@@ -190,6 +190,21 @@ importers:
         specifier: workspace:*
         version: link:../contracts
 
+  spikes/demo-real-data:
+    dependencies:
+      '@earendil-works/pi-coding-agent':
+        specifier: 1.4.0
+        version: 1.4.0(@aws-sdk/credential-provider-node@3.972.89)(@smithy/signature-v4@5.7.4)(ws@8.22.0)
+      '@vibe-excel/contracts':
+        specifier: workspace:*
+        version: link:../../packages/contracts
+      '@vibe-excel/runtime':
+        specifier: workspace:*
+        version: link:../../packages/runtime
+      '@vibe-excel/session':
+        specifier: workspace:*
+        version: link:../../packages/session
+
   spikes/m0-pi:
     dependencies:
       '@earendil-works/pi-coding-agent':

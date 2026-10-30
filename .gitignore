@@ -23,10 +23,15 @@ artifacts/
 traces/
 data-revisions/
 spikes/*/out/
+# 侦察脚本生成的中间事实（随时可由脚本重算）
+spikes/*/tools/*.json
 *.db
 *.db-journal
 *.db-wal
 *.db-shm
+
+# 真实业务数据（含个人信息）留在本地，不进代码仓库。
+ground_true_excel/
 
 # 合成数据一律由代码生成，不提交二进制表格。
 # 若将来确有需要提交夹具，在此目录下加 ! 例外。
