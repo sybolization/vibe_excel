@@ -15,11 +15,13 @@
 | 路径 | 职责 |
 |---|---|
 | `packages/contracts` | 跨层最小契约（品牌化 ID、运行状态、执行事件、限制） |
+| `packages/session` | S1：Program/Session/Run/DataRevision 持久化、草稿与发布、恢复视图 |
+| `packages/runtime` | S3：会话工作区、排他锁、SQLite 一致性快照、干净重跑 |
 | `spikes/m0-pi` | M0 验证程序：pi RPC 接入、独立 cwd、取消、会话恢复、环境白名单 |
 | `runtime-env` | 数据运行时：uv 管理的 Python 3.12 + pandas + openpyxl + sqlite3 |
 | `docs/adr` | 架构决策记录 |
 
-尚未开始：`packages/session`、`packages/harness`、`packages/runtime`、`packages/eval`、`packages/growth`、`apps/web`。
+尚未开始：`packages/harness`、`packages/eval`、`packages/growth`、`apps/web`。
 
 ## 一次性准备
 
@@ -37,7 +39,7 @@ pnpm install
 
 ```powershell
 pnpm typecheck                      # tsc 类型检查（含 erasableSyntaxOnly）
-pnpm test                           # vitest
+pnpm test                           # vitest：session + runtime 两套测试
 uv run --project runtime-env python runtime-env/smoke.py   # 数据运行时冒烟测试
 
 # M0 验证（需要 OPENCODE_API_KEY 在环境里）

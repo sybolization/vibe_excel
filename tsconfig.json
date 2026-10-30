@@ -4,5 +4,5 @@
     "noEmit": true,
     "allowImportingTsExtensions": true
   },
-  "include": ["packages/*/src/**/*.ts", "spikes/*/src/**/*.ts"]
+  "include": ["packages/*/src/**/*.ts", "packages/*/test/**/*.ts", "spikes/*/src/**/*.ts"]
 }

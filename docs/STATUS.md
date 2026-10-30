@@ -1,117 +1,109 @@
 # 项目状态报告
 
-> 生成时间：2026-10-30 · 基准提交：`e44d477`（+ 本文件所在提交）
-> 口径：只写**已跑过、有产物可查**的事；没验证的一律归入「没做什么」或「缺口」。
+> 生成时间：2026-10-30 · 口径：只写**已跑过、有测试或产物可查**的事；没验证的一律归入「没做什么」或「缺口」。
 
 ## 一句话
 
-**M0 已完成并通过**：pi 能以「子进程 + 独立工作区」跑通 Python→SQLite 的完整导入，取消与会话恢复可用，全程只用内置工具。
-**M1 尚未开始**：指南描述的那条纵向闭环里，产品层面的任何一段（程序持久化、用户确认、页面、发布、复用）都还没有实现。
+**M0 完成**（pi 能跑通纵向闭环），**S1/S3 的基础设施已落地并有测试覆盖**。
+**M1 仍未开始**：产品层面的纵向链路（探查 → 询问 → 确认 → 页面 → 发布 → 复用）一段都还没有。
 
 ---
 
 ## 一、做了什么
 
-### 1. 工程基线（可复现）
+### 1. 工程基线
 
-| 事项 | 状态 | 证据 |
+Git 仓库（`main`）、pnpm workspace（5 个 project）、pi 全家族钉 **1.4.0**、TypeScript 严格模式 + `erasableSyntaxOnly`（Node 直接执行 `.ts`，无构建步骤）。数据与制品一律不进 Git。
+
+### 2. 数据运行时
+
+uv 管理 **CPython 3.12.14**；pandas 2.3.3 / openpyxl 3.1.5 / SQLite 3.53.1，依赖锁在 [uv.lock](runtime-env/uv.lock)。[smoke.py](runtime-env/smoke.py) 6 项断言固化了一个真实陷阱：`pd.to_datetime` 对混合格式只从首值推断，会把合法的 `2026-03-05` 静默变成 `NaT`。
+
+### 3. S1：Session 与版本（有测试）
+
+[packages/session](packages/session/src/index.ts)，设计见 [ADR-0002](docs/adr/0002-control-plane-and-versions.md) / [ADR-0004](docs/adr/0004-git-draft-and-publish.md)。
+
+- 控制面 SQLite（`<store>/control.db`，schema v2）存 Program / Session / Run / DataRevision / Artifact / Publish；
+- 每个会话一个草稿分支 `draft/<id>` + 独立 `git worktree`；
+- run 开始时固定代码版本，之后的提交不属于该 run；
+- 终态不可回退；同内容数据修订只登记一次；
+- **发布三重校验**：干净重跑通过 + 草稿领先 + main 基线未被非授权改写，然后 `merge --no-ff` 并留发布记录；
+- `recoverSession()` 给出只读恢复视图（代码版本 + 数据版本 + 输入批次 + 制品）。
+
+### 4. S3：Runtime 与数据边界（有测试）
+
+[packages/runtime](packages/runtime/src/index.ts)，设计见 [ADR-0003](docs/adr/0003-serialization-snapshot-cleanrun.md)。
+
+| 能力 | 做法 | 关键点 |
 |---|---|---|
-| Git 仓库 | 已初始化，`main` 分支 2 个提交 | `828ecfc`、`e44d477` |
-| pnpm workspace | `packages/*` / `spikes/*` / `apps/*` | [pnpm-workspace.yaml](pnpm-workspace.yaml) |
-| pi 依赖 | 全家族钉 **1.4.0**（此前 1.2.0/1.4.0 混装已清除） | [pnpm-lock.yaml](pnpm-lock.yaml) |
-| TypeScript | 严格模式 + `erasableSyntaxOnly`（Node 直接执行 `.ts`，无构建步骤） | [tsconfig.base.json](tsconfig.base.json) |
-| 仓库/数据边界 | 原始文件、DB、制品、trace 一律不进 Git | [.gitignore](.gitignore) |
+| 串行化 | 每会话独立 `work/` + 会话级排他锁（`O_EXCL`，带陈旧锁回收） | 跨会话并发天然安全，因为不共用数据库文件 |
+| 快照 | `VACUUM INTO` + 内容寻址 | 不复制活跃库文件；WAL 里已提交的数据也会被包含 |
+| 恢复 | 暂存 → `quick_check` → 清 `-wal`/`-shm` → 原子 rename | 坏快照拒绝恢复，绝不用坏文件覆盖现有数据 |
+| 干净重跑 | `git worktree --detach` + 最小环境 | 全新目录、内容确定、不带模型凭证 |
+| 输出比较 | 文件内容哈希 + `diffRunFiles` | 只给差异，业务等价由调用方判断 |
 
-### 2. 数据运行时（真跑过）
+### 5. 测试
 
-- `uv` 管理 **CPython 3.12.14**；pandas **2.3.3**、openpyxl **3.1.5**、SQLite **3.53.1**；锁定在 [uv.lock](runtime-env/uv.lock)。
-- [smoke.py](runtime-env/smoke.py) 冒烟测试 6 项断言全过，并把一个真实陷阱固化成回归用例：
-  **`pd.to_datetime` 对混合格式只从首值推断单一格式，会把合法的 `2026-03-05` 静默变成 `NaT`。**
+`pnpm test`：**23 项全绿**（session 11 / runtime 12）。覆盖跨进程恢复（用另一个进程直接读 `control.db` 验证落盘）、只读恢复视图、main 非授权改写被拒、WAL 快照自洽、陈旧锁回收、确定性重跑一致性。
 
-### 3. 跨层契约（最小集合）
+### 6. M0 与文档
 
-[packages/contracts/src/index.ts](packages/contracts/src/index.ts)：品牌化 ID（Program / Session / Run / DataRevision / Commit）、`RunStatus`、`ExecEvent`、`ExecLimits`、`RunRecord`。
-
-刻意**没有**定义任何筛选 / 匹配 / 透视类业务动作——动作空间是代码，不是 DSL。
-
-### 4. pi 接入（M0 核心，五项全过）
-
-断言形态见 [ADR-0001 §4](docs/adr/0001-pi-integration.md)。最近一次全量运行：`report-2026-10-30T00-15-29-843Z.json`。
-
-| # | 检查项 | 结果 |
-|---|---|---|
-| 1 | 独立 cwd | 子进程自报路径与构造参数逐字符一致 |
-| 2 | 不用自定义工具完成 Python→SQLite 导入 | 成功，**只用到内置 `bash`/`write`/`edit`** |
-| 3 | 来源行不被丢失 | 覆盖 5/5，无一行落进两个去向 |
-| 4 | 取消真的生效 | abort 后目标文件未出现 → 子进程确实被打断 |
-| 5 | 会话恢复 | 新进程 `--continue` 答回上一轮的数字 |
-| 6 | 环境白名单 + 每会话独立 agent 目录 | 哨兵未泄漏、凭证可见、`auth.json` 仅 2 字节（凭证不落盘） |
-
-一次真实导入的成本锚点：**59 秒 / 986 条事件 / 8 次工具调用 / 40308 tokens / $0.0033**。
-
-### 5. 追踪产物（四件套，每个 run 固定产出）
-
-`events.jsonl`（原始事件流）· `timeline.txt`（折叠流式增量）· 会话 `.jsonl` · 导出 `.html`（含每条消息 token 与成本）。
-例：`<制品根>\m0\python-2026-10-30T00-15-29-843Z\`，时间线 16 KiB / 88 行。
-
-### 6. 文档
-
-- [ADR-0001](docs/adr/0001-pi-integration.md)：接入形态（RPC 子进程，否决 worker 线程）、版本钉死、Windows 真实边界、14 行实测表、13 条缺口。
-- [README](README.md)：目录职责、一次性准备、常用命令、trace 怎么看、已知限制。
+- M0 五项检查仍可重跑（`node spikes/m0-pi/src/main.ts --all`），追踪产物四件套齐全；
+- ADR：[0001 接入形态](docs/adr/0001-pi-integration.md) · [0002 控制面与版本](docs/adr/0002-control-plane-and-versions.md) · [0003 串行化/快照/重跑](docs/adr/0003-serialization-snapshot-cleanrun.md) · [0004 草稿与发布](docs/adr/0004-git-draft-and-publish.md)。
 
 ---
 
 ## 二、没做什么
 
-### 1. 按指南 §11 的目录职责对账
+### 1. 目录对账
 
-| 目录 | 负责方 | 状态 |
-|---|---|---|
-| `packages/contracts` | Orchestrator | **有**（仅类型，无行为） |
-| `packages/session` | S1 | **无** |
-| `packages/harness` | S2 | **无**（pi 接入目前只在 spike 里） |
-| `packages/runtime` | S3 | **无**（独立工作区/子进程/DB 制品仍是 spike 内部实现） |
-| `packages/eval` | S4 | **无** |
-| `apps/web` | S5 | **无** |
-| `packages/growth` | S6 | **无**（指南本就要求延后） |
-| `docs/adr` | Orchestrator | 只有 0001 |
+| 目录 | 状态 |
+|---|---|
+| `packages/contracts` | 有（仅类型） |
+| `packages/session` | **有**（S1） |
+| `packages/runtime` | **有**（S3 基础部分） |
+| `packages/harness` | **无**——pi 接入仍只在 `spikes/m0-pi` |
+| `packages/eval` | **无** |
+| `apps/web` | **无** |
+| `packages/growth` | 无（指南要求延后） |
 
-### 2. 按里程碑对账
+### 2. 里程碑
 
-- **M0：完成**（含 13 条明确缺口，见 ADR §5）。
-- **M1：未开始。** 指南那条纵向链
-  `合成 Excel → 探查与询问 → staging → 确认与验证 → SQLite → SQL → agent 页面 → 草稿 → 干净重跑 → 发布 → 新数据复用`
-  里，**没有一段是产品代码**。M0 只证明了「裸 pi 能干这件事」，没证明「我们的产品能干这件事」。
-- **M2（baseline 与摩擦）/ M3（有证据的改进）：未开始。**
+- **M0：完成**（13 条缺口见 ADR-0001 §5）
+- **S1 / S3 基础：完成并有测试**
+- **M1：未开始**
+- M2 / M3：未开始
 
-### 3. 具体能力缺口（用户会直接感知到的）
+### 3. 仍然缺的能力
 
-1. **没有持久化与恢复**：Program / Session / Run / DataRevision 只有类型定义，没有存储、没有恢复。目前唯一的会话事实是 pi 自己的 `.jsonl`。
-2. **没有草稿与发布**：没有 Git 草稿分支、没有发布校验、没有「干净重跑」入口。
-3. **没有数据库快照**：SQLite 的备份/恢复未实现，也未实测 WAL 下的一致性。
-4. **没有用户确认流程**：M0 里那句「待确认」只是模型自己写的表，没有真正的「问用户 → 记录决定 → 影响下次运行」闭环。
-5. **没有界面**：无外壳、无业务画布、无待确认清单、无下载入口。
-6. **没有评测**：零合成任务、零独立 verifier、零 baseline 报告。
-7. **没有并发与串行化**：全部单进程串行；指南 §3.3 要求的「同 session 串行写、跨 session 不共用可写库」没有任何机制。
-8. **没有工作区写入约束**：本轮调研后**按决定推迟**。已查明 pi 的沙箱在 Windows 上不可用（源码硬拦 win32），`write`/`edit` 级拦截可做但拦不住 `bash`，只能算防手滑。
-9. **没有接触任何真实 HR 数据**：符合指南本阶段只用合成数据的约束，但这意味着真实文件的脏法还没被验证过。
+1. **没有 Harness**：会话创建/恢复、事件收集、运行协调都还没有常驻层；`spikes/m0-pi` 是验证脚本，不是产品代码。
+2. **没有用户确认流程**：语义确认、待确认清单、决定如何影响下次运行——一个都没有。
+3. **没有界面**：外壳、业务画布、待确认清单、下载入口全无。
+4. **没有评测**：零合成任务、零独立 verifier、零 baseline。
+5. **没有工作区写入约束**（已决定推迟；调研结论见 ADR-0001 缺口 13）。
+6. **没有接触真实 HR 数据**（符合约束，但也意味着真实文件的脏法未被验证）。
+7. **发布前没有钩子**：`cleanRunPassed` 由调用方提供，只防误用、不防谎报（ADR-0004 缺口）。
+8. **快照是整库全量**：大库会阻塞写入，尚无增量或轮转策略（ADR-0003 限制）。
+9. **取消只验证了直接子进程**，后代进程回收未验证。
 
 ---
 
-## 三、三个已经拍板的决定
+## 三、已经拍板的决定
 
-| 决定 | 结论 | 理由 |
+| 决定 | 结论 | 记录在 |
 |---|---|---|
-| 接入形态 | RPC 子进程 + 包内 `RpcClient` | 可取消、可重启、可观测、cwd/env 可控；worker 线程在 pi 里无对应物 |
-| 模型路线 | `opencode-go` / `deepseek-v4.1-flash`（长期） | 直连 `api.deepseek.com` 的 TLS 在本机被拦，该 provider 用本机已有凭证 |
-| 工作区写入约束 | 推迟，不做 | 没有真正的边界可做；半截的约束容易变成虚假安全感 |
+| 接入形态 | RPC 子进程 + 包内 `RpcClient` | ADR-0001 |
+| 模型路线 | `opencode-go` / `deepseek-v4.1-flash`（长期） | ADR-0001 |
+| 控制面存储 | 独立 SQLite + 内容寻址数据修订 | ADR-0002 |
+| 串行化 | 目录隔离为主，会话锁为显式约束 | ADR-0003 |
+| 快照 | `VACUUM INTO`，不复制活跃库 | ADR-0003 |
+| 草稿与发布 | 一会话一 worktree，发布三重校验 | ADR-0004 |
+| 工作区写入约束 | 推迟（Windows 无可用的 OS 级沙箱） | ADR-0001 缺口 13 |
 
 ---
 
-## 四、如果继续，最该先补的三件事
+## 四、最该先补的三件事
 
-1. **S1 的最小持久化**：一个 run 能被记录下来、能被定位到「代码版本 + 输入批次 + 数据版本 + 制品」，进程重启后还能找回来。M1 的每条链路都依赖它。
-2. **S2 的最小 Harness**：把 `spikes/m0-pi` 里已经验证过的能力从脚本搬成常驻层——创建/恢复 pi 会话、收事件、把「已取消」这类事实自己记下来（因为取消时 pi 不产生任何事件）。
-3. **S4 的最小任务族**：M1 需要「合成 Excel」当输入，而它属于 S4。建议先交 3–5 个够 M1 用的任务（含至少一个语义不确定案例），不追求 20 个。
-
-三件事共同的前置：**同一输入多次运行结论不一致**（四次运行出现两种分法）必须在 verifier 设计里被显式处理，否则评测结果不可信。
+1. **S2 Harness**：把 `spikes/m0-pi` 里验证过的能力搬成常驻层——创建/恢复 pi 会话、收事件、把「已取消」这类事实自己记下来（因为取消时 pi 不产生任何事件），并在这里调用 session/runtime 的 API。
+2. **S4 最小任务族**：M1 的输入是合成 Excel，属于 S4。先交 3–5 个够用的任务，含至少一个语义不确定案例。
+3. **用户确认流程**：这是产品与「一个会写脚本的 agent」的分界线。同一输入四次运行两种判定已经证明：语义判断必须落到用户确认与标注上，而不是让模型每次即兴决定。
