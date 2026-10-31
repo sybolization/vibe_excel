@@ -3,3 +3,7 @@
 *.ps1 text eol=crlf
 *.cmd text eol=crlf
 *.bat text eol=crlf
+
+# 二进制表格不参与换行归一（real-data/jinny 下的真实输入表为例外放行，见 .gitignore）
+*.xlsx binary
+*.xls binary

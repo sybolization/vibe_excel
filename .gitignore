@@ -37,3 +37,8 @@ ground_true_excel/
 # 若将来确有需要提交夹具，在此目录下加 ! 例外。
 *.xlsx
 *.xls
+
+# 例外（用户明确要求）：jinny 的 MFG 招聘真实输入表留档在本私有仓库，
+# 源目录 C:\project\better-operate-doc-jinny\original-data，见 real-data/jinny/SOURCE.md。
+# 其余 *.xlsx 仍然忽略；这条只放行这一个目录。
+!real-data/jinny/*.xlsx
