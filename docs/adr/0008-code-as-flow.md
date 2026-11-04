@@ -159,10 +159,11 @@ pi 给的挂钩点足够自己实现：`context`（每次 LLM 调用前，可改
 
 已经补上的：
 
-- ~~解析器没实现~~ → `py/flow_parse.py`（36 条用例：`test/flow-code.test.ts`），
+- ~~解析器没实现~~ → `py/flow_parse.py`（33 条用例：`test/flow-code.test.ts`），
   提示词里的 few-shot 由**生产解析器**验证（`test/prompt-contract.test.ts`）。
 - ~~C 规则的自动检查没实现~~ → 现在都在解析期拒绝，且报错带文件 + 行号，
-  错误码 15 个（`MAIN_CONTROL_FLOW` / `NODE_PARAM_NOT_TABLE` / `NODE_TABLE_NAME_BAD` …）。
+  一共 17 个契约错误码（`MAIN_CONTROL_FLOW` / `MAIN_CALL_NOT_LOCAL` / `NODE_PARAM_NOT_TABLE` /
+  `NODE_TABLE_NAME_BAD` / `SYNTAX_ERROR` …）+ 1 个内部错误 + 1 条警告（`UNUSED_TABLE_FUNC`）。
 
 还没做的：
 
