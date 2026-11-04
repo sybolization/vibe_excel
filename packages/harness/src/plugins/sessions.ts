@@ -30,7 +30,7 @@ import type { WorkspacePaths } from '@vibe-excel/runtime';
 import type { Program, Session } from '@vibe-excel/session';
 
 import { batchIdOf, databaseDigest, dirDigests, sha256File } from '../fs-util.ts';
-import { describeFlow, planFlow, suggestOptimizations } from '../flow.ts';
+import { describeFlow, formatFlowWarning, planFlow, suggestOptimizations } from '../flow.ts';
 import { diffRounds, runFlowRound, writeMaterializeSpec, type FlowRoundResult, type NodeExecution } from '../flow-run.ts';
 import { loadFlowAtCommit, materializeRunnerPath, nodeRunnerPath, readFileAtCommit } from '../flow-source.ts';
 import { assertSameFlow, buildApplyPrompt, buildReviewPrompt, parseProposalFile, selectProposal } from '../optimize.ts';
@@ -270,7 +270,7 @@ export default definePlugin<SessionsConfig>({
         const commit = db.draftHead(session.id);
         if (!commit) fail('草稿分支没有提交：先跑 author');
 
-        const flow = loadFlowAtCommit(program.repoPath, commit, config.flowPath);
+        const flow = loadFlowAtCommit(program.repoPath, commit, config.flowPath, { python: exec.interpreter() });
         const plan = planFlow(flow);
         const run = db.beginRun(session.id, { inputBatchId: batch.id, dataRevisionId: inputRevision.id });
         const runDir = join(paths.runs, run.id);
@@ -384,6 +384,13 @@ export default definePlugin<SessionsConfig>({
           flow: flow.flow,
           flowDigest: plan.digest,
           codeCommit: commit,
+          // 图不进版本库（脚本即事实，图是它的投影）：它是这次运行的证据，不是要提交的产物。
+          graph: {
+            source: flow.entry !== undefined ? 'code' : 'json',
+            entry: flow.entry ?? null,
+            warnings: flow.warnings ?? [],
+            nodes: plan.spec.nodes,
+          },
           batchId: batch.id,
           inputRevisionId: inputRevision.id,
           asOf,
@@ -455,10 +462,10 @@ export default definePlugin<SessionsConfig>({
       const db = store.db();
       const commit = db.draftHead(session.id);
       if (!commit) fail('草稿分支没有提交：先跑 author');
-      const flow = loadFlowAtCommit(program.repoPath, commit, config.flowPath);
+      const flow = loadFlowAtCommit(program.repoPath, commit, config.flowPath, { python: exec.interpreter() });
       const plan = planFlow(flow);
       const flowJson = readFileAtCommit(program.repoPath, commit, config.flowPath);
-      const planLines = describeFlow(plan);
+      const planLines = describeFlow(plan, { steps: true });
       // 评审/应用也用同一份探测结果：两个命令看到的必须是同一个工作区。
       const facts = factsOf(program, session, paths);
       const environment = renderWorkspaceFacts(facts);
@@ -659,9 +666,27 @@ export default definePlugin<SessionsConfig>({
           agent.exportHtml(file, join(traceDir, `${basename(file).replace(/\.jsonl$/, '')}.html`));
         }
         const commit = store.db().commitDraft(session.id, `author(${input.label}): 由模型写出的程序`);
+        // 提交之后立刻试着解析一次：代码解析不出流程是最常见的失败，
+        // 现在告诉人，比等到 `run` 才炸好。**不改退出码**——提交这件事已经发生了。
+        let flowDiagnostic: string | null = null;
+        if (commit) {
+          try {
+            const parsed = loadFlowAtCommit(program.repoPath, commit, config.flowPath, { python: exec.interpreter() });
+            const plan = planFlow(parsed);
+            const graph = parsed.entry !== undefined ? `代码:${parsed.entry}` : 'flow.json';
+            console.log(`  流程 flow@${plan.digest}  节点 ${plan.spec.nodes.length}  图=${graph}`);
+            for (const warning of parsed.warnings ?? []) {
+              console.log(`  ! ${formatFlowWarning(parsed.entry, warning)}`);
+            }
+          } catch (error) {
+            flowDiagnostic = error instanceof Error ? error.message : String(error);
+            console.log(`  ⚠ 解析不出流程：${flowDiagnostic}`);
+            console.log('    这是提示，不是通过：run 会再失败一次。');
+          }
+        }
         writeFileSync(
           join(traceDir, 'author.json'),
-          `${JSON.stringify({ label: input.label, promptFile: promptPath, ...outcome, commit, traceDir }, null, 2)}\n`,
+          `${JSON.stringify({ label: input.label, promptFile: promptPath, flowDiagnostic, ...outcome, commit, traceDir }, null, 2)}\n`,
           'utf8',
         );
         console.log(`耗时 ${(outcome.elapsedMs / 1000).toFixed(1)}s，事件 ${outcome.eventCount} 条，工具 ${outcome.toolNames.join(',') || '无'}`);
@@ -765,8 +790,8 @@ export default definePlugin<SessionsConfig>({
           const { program, session } = resolveContext();
           const commit = store.db().draftHead(session.id);
           if (!commit) fail('草稿分支没有提交：先跑 author');
-          const plan = planFlow(loadFlowAtCommit(program.repoPath, commit, config.flowPath));
-          for (const line of describeFlow(plan)) cmd.print(line);
+          const plan = planFlow(loadFlowAtCommit(program.repoPath, commit, config.flowPath, { python: exec.interpreter() }));
+          for (const line of describeFlow(plan, { steps: true })) cmd.print(line);
           const hints = suggestOptimizations(plan);
           for (const hint of hints) cmd.print(`  ~ ${hint.note}`);
           if (hints.length > 0) cmd.print('  这些只是建议：要不要更短由你决定，模型不会自己改。');

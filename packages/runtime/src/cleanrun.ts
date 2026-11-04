@@ -128,6 +128,11 @@ export function cleanRerun(options: CleanRunOptions): CleanRunResult {
   try {
     const env: Record<string, string> = { ...baseEnv(), ...(options.env ?? {}) };
     if (options.asOfDate) env['VIBE_EXCEL_AS_OF'] = options.asOfDate;
+    // 强制 UTF-8：Windows 上 python 默认按控制台代码页写 stdout/stderr（本机是 cp936），
+    // 而我们用 utf8 解码捕获——不写死的话，节点里任何一句中文 print / 报错都会变成乱码。
+    // 不能靠「父进程恰好设了 PYTHONUTF8」：从别的 shell 启动就丢。
+    env['PYTHONUTF8'] = '1';
+    env['PYTHONIOENCODING'] = 'utf-8';
 
     const run = spawnSync(options.entry.command, options.entry.args, {
       cwd: workDir,

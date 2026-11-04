@@ -91,7 +91,14 @@ function runPythonNode(fields: {
         fields.func,
         ...Object.entries(fields.kwargs).flatMap(([key, value]) => [`--${key.replace(/_/g, '-')}`, value]),
       ],
-      { encoding: 'utf8', cwd: fields.cwd, stdio: ['ignore', 'pipe', 'pipe'] },
+      {
+        encoding: 'utf8',
+        cwd: fields.cwd,
+        stdio: ['ignore', 'pipe', 'pipe'],
+        // 平台（cleanRerun）会强制 UTF-8；这个 helper 在模拟平台，所以也得设，
+        // 否则中文报错在 Windows 上会以 cp936 写出来、被 utf8 读成乱码。
+        env: { ...process.env, PYTHONUTF8: '1', PYTHONIOENCODING: 'utf-8' },
+      },
     );
     return { exitCode: 0, timedOut: false, stdout, stderr: '', elapsedMs: Date.now() - started };
   } catch (error) {
@@ -173,5 +180,86 @@ describe.skipIf(!pythonReady)('节点 = 函数：真实 python 端到端', () =>
     const db = new DatabaseSync(dbPath, { readOnly: true });
     expect((db.prepare('SELECT count(*) AS n FROM source').get() as { n: number }).n).toBe(2);
     db.close();
+  });
+});
+
+/**
+ * ADR-0008 §3 的运行时含义：标了 `"t:表名"` 的参数，由平台从库里读成 DataFrame 递进去。
+ *
+ * 这条如果没实现，提示词里那个 `def clean(db, raw: "t:raw_employees")` 一跑就
+ * 「需要参数 raw，但平台没有提供」——解析出来的图是对的，但跑不了。
+ */
+describe.skipIf(!pythonReady)('t: 标注 = 平台把表读成 DataFrame 递进来', () => {
+  const T_FLOW = `
+import sqlite3
+
+
+def build(db, raw: "t:raw_data") -> "t:built":
+    """把平台递进来的表算成 built（自己绝不 read_sql 输入表）。"""
+    rows = [(int(row["id"]), str(row["name"]).upper()) for _, row in raw.iterrows()]
+    con = sqlite3.connect(db)
+    con.execute("CREATE TABLE IF NOT EXISTS built (id INTEGER, name TEXT)")
+    con.execute("DELETE FROM built")
+    con.executemany("INSERT INTO built VALUES (?, ?)", rows)
+    con.commit()
+    con.close()
+    print(f"built rows={len(rows)}")
+`;
+
+  /** 建一个带 raw_data 的库，模拟「上游物化好了」。 */
+  function seedDb(dir: string): string {
+    const path = join(dir, 'hr.db');
+    const db = new DatabaseSync(path);
+    db.exec('CREATE TABLE raw_data (id INTEGER, name TEXT)');
+    db.exec("INSERT INTO raw_data VALUES (1, 'ann'), (2, 'bob')");
+    db.close();
+    return path;
+  }
+
+  it('注入是读真的库：函数只管用 df，写自己的产出表', () => {
+    const dir = tempDir();
+    writeFileSync(join(dir, 'pipeline.py'), T_FLOW, 'utf8');
+    const dbPath = seedDb(dir);
+
+    const result = runPythonNode({ cwd: dir, file: 'pipeline.py', func: 'build', kwargs: { db: dbPath } });
+    expect(result.stderr).toBe('');
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toMatch(/built rows=2/);
+
+    const db = new DatabaseSync(dbPath, { readOnly: true });
+    expect(db.prepare('SELECT id, name FROM built ORDER BY id').all()).toEqual([
+      { id: 1, name: 'ANN' },
+      { id: 2, name: 'BOB' },
+    ]);
+    db.close();
+  });
+
+  it('写了 from __future__ import annotations 也一样（注解在运行时是带引号的字符串）', () => {
+    const dir = tempDir();
+    writeFileSync(join(dir, 'pipeline.py'), `from __future__ import annotations\n${T_FLOW}`, 'utf8');
+    const dbPath = seedDb(dir);
+
+    const result = runPythonNode({ cwd: dir, file: 'pipeline.py', func: 'build', kwargs: { db: dbPath } });
+    expect(result.stderr).toBe('');
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toMatch(/built rows=2/);
+  });
+
+  it('输入表不存在 → 明确说是哪张表读不出来（不是一句 IndexError）', () => {
+    const dir = tempDir();
+    writeFileSync(join(dir, 'pipeline.py'), T_FLOW, 'utf8');
+    const dbPath = makeDb(dir); // 只有 meta，没有 raw_data
+    const result = runPythonNode({ cwd: dir, file: 'pipeline.py', func: 'build', kwargs: { db: dbPath } });
+    expect(result.exitCode).not.toBe(0);
+    expect(result.stderr).toMatch(/raw_data/);
+    expect(result.stderr).toMatch(/读不出来/);
+  });
+
+  it('声明了 t: 输入却没有 db 入参 → 说清楚平台拿不到连接', () => {
+    const dir = tempDir();
+    writeFileSync(join(dir, 'pipeline.py'), T_FLOW, 'utf8');
+    const result = runPythonNode({ cwd: dir, file: 'pipeline.py', func: 'build', kwargs: { as_of: '2026-01-01' } });
+    expect(result.exitCode).not.toBe(0);
+    expect(result.stderr).toMatch(/没有 db 入参/);
   });
 });

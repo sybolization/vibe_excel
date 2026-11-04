@@ -4,17 +4,18 @@
  * 提示词是模型唯一的说明书：契约改了、提示词没改，模型就会写出解析器读不出来的代码；
  * 模板变量拼错一个，模型看到的就是 `{{DB}}` 这种原文。两种错都在这里挡住。
  *
- * 更狠的一条：提示词里的 **few-shot 示例要真的能被解析器读**。示例是模型照着抄的模板，
- * 示例错了，整批产出都会错——所以这里真的把那段 Python 抽出来丢给 ast 跑一遍。
+ * 最狠的一条：提示词里的 **few-shot 示例要真的能被解析器读**。示例是模型照着抄的模板，
+ * 示例错了整批产出都会错——所以这里把那段 Python 抽出来，丢给**生产用的** `flow_parse.py`
+ * 跑一遍，逐个核对解析出来的节点。测试里不另写一份检查逻辑，否则测的是副本不是产品。
  */
 
-import { execFileSync } from 'node:child_process';
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { existsSync, readFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 
-import { afterAll, describe, expect, it } from 'vitest';
+import { describe, expect, it } from 'vitest';
 
+import { parseCodeFlow } from '../src/flow-code.ts';
+import { bundledPython } from '../src/flow-source.ts';
 import { fillTemplate } from '../src/plugins/sessions.ts';
 
 const repoRoot = resolve(import.meta.dirname, '..', '..', '..');
@@ -40,9 +41,6 @@ const VARS: Record<string, string> = {
 };
 
 const placeholders = [...text.matchAll(/\{\{(\w+)\}\}/g)].map((match) => match[1]!).sort();
-
-const scratch = mkdtempSync(join(tmpdir(), 'vibe-prompt-'));
-afterAll(() => rmSync(scratch, { recursive: true, force: true }));
 
 describe('写程序的提示词：prompts/author-flow.md', () => {
   it('用到的占位符都有值（大小写两种写法都认）', () => {
@@ -71,6 +69,21 @@ describe('写程序的提示词：prompts/author-flow.md', () => {
     expect(text).toMatch(/`flow\.json` 里\*\*不写节点\*\*/);
   });
 
+  it('说清楚输入表由平台注入、写表由节点自己、入口文件怎么指定', () => {
+    // 「t: 参数 = 平台把表读成 DataFrame 递进来」是 ADR-0008 §3 的运行时含义，
+    // 提示词漏了这句，模型就会在节点里重复 read_sql，签名标注也就白写了。
+    expect(text).toMatch(/读成 DataFrame 递给你/);
+    expect(text).toMatch(/不要再去\s*`?read_sql`?/);
+    expect(text).toMatch(/自己开连接/);
+    expect(text).toContain('"entry"');
+  });
+
+  it('把解析器的拒绝条件列给模型看（它自查时要能对上）', () => {
+    for (const needle of ['`main` 里有 `if`', '节点没有 docstring', '返回没标', '不是字符串字面量']) {
+      expect(text).toContain(needle);
+    }
+  });
+
   it('提供了完整的 few-shot：flow.json + 可运行的 pipeline.py', () => {
     expect(text).toMatch(/```json[\s\S]*"materialize"/);
     expect(text).toMatch(/```python[\s\S]*def main\(db, as_of/);
@@ -85,51 +98,29 @@ describe('写程序的提示词：prompts/author-flow.md', () => {
     expect(text).toMatch(/`for f in \[a, b\]: f\(\)` 解析不出顺序/);
   });
 
-  it.skipIf(!existsSync(pythonPath))('few-shot 里的 Python 真的能被 ast 读成一条流', () => {
+  it.skipIf(!existsSync(pythonPath))('few-shot 里的 Python 真的能被解析器读成一条流', () => {
     const blocks = [...text.matchAll(/```python\n([\s\S]*?)```/g)].map((match) => match[1]!);
     expect(blocks.length).toBeGreaterThan(0);
-    const file = join(scratch, 'pipeline.py');
-    writeFileSync(file, blocks[0]!, 'utf8');
 
-    // 这条脚本就是解析器将来要做的事的最小版本：main 线性 + 标注齐全。
-    const check = `
-import ast, sys
+    const code = parseCodeFlow({
+      entry: 'pipeline.py',
+      source: blocks[0]!,
+      python: pythonPath,
+      parserPath: bundledPython('py', 'flow_parse.py'),
+    });
 
-src = open(sys.argv[1], encoding="utf-8").read()
-tree = ast.parse(src)
-
-defs = {n.name: n for n in tree.body if isinstance(n, ast.FunctionDef)}
-assert "main" in defs, "示例里没有 main"
-
-main = defs["main"]
-bad = [type(s).__name__ for s in main.body if isinstance(s, (ast.If, ast.For, ast.While, ast.Try, ast.With))]
-assert not bad, f"main 里有控制流: {bad}"
-
-RUNTIME = {"db", "as_of", "inputs", "out", "report"}
-calls = []
-for stmt in main.body:
-    node = stmt.value if isinstance(stmt, ast.Expr) else (stmt.value if isinstance(stmt, ast.Assign) else None)
-    if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id in defs:
-        calls.append(node.func.id)
-assert calls, "main 里没有调用本文件的函数"
-
-for name in calls:
-    fn = defs[name]
-    for arg in fn.args.args:
-        if arg.arg in RUNTIME:
-            continue
-        ann = ast.unparse(arg.annotation) if arg.annotation else None
-        assert ann is not None, f"{name} 的参数 {arg.arg} 没有标注"
-        assert ann.startswith('"t:') or ann.startswith("'t:"), f"{name} 的参数 {arg.arg} 标注不是表: {ann}"
-    ret = ast.unparse(fn.returns) if fn.returns else None
-    assert ret is not None and (ret.startswith('"t:') or ret.startswith("'t:")), f"{name} 没有表返回值标注: {ret}"
-    assert ast.get_docstring(fn), f"{name} 没有 docstring（节点标题）"
-
-print("ok", len(calls))
-`;
-    const script = join(scratch, 'check.py');
-    writeFileSync(script, check, 'utf8');
-    const out = execFileSync(pythonPath, [script, file], { encoding: 'utf8' });
-    expect(out.trim()).toMatch(/^ok \d+$/);
+    // 节点顺序就是 main 里的调用顺序
+    expect(code.nodes.map((node) => node.func)).toEqual(['clean_employees', 'clean_positions', 'match_available']);
+    // 边全部来自签名标注
+    expect(code.nodes.map((node) => ({ reads: node.reads, writes: node.writes }))).toEqual([
+      { reads: ['raw_employees'], writes: ['employees'] },
+      { reads: ['raw_positions'], writes: ['available_positions'] },
+      { reads: ['employees', 'available_positions'], writes: ['match_result'] },
+    ]);
+    // 标题来自 docstring，块说明来自块首字符串
+    expect(code.nodes[0]!.title).toContain('清洗花名册');
+    expect(code.nodes[0]!.steps.some((step) => step.label.includes('空表就别往下走'))).toBe(true);
+    // 示例里 main 的 pandas 流水账不该产生警告（否则模型会学着写一堆无意义提示）
+    expect(code.warnings).toEqual([]);
   });
 });

@@ -8,10 +8,16 @@
  *
  * 三条硬规则（都是这次设计里定下来的）：
  *   1. 没被物化成表的文件，不能进计算图 —— 节点拿到的永远是表，不是 Excel；
- *   2. 节点的依赖写在**函数签名**上（`db` / `inputs` / `out` / `as_of` / `report`），
+ *   2. 节点的依赖写在**函数签名**上（`db` / `inputs` / `out` / `as_of`），
  *      平台按签名过滤传参；传一个 ctx 会把依赖藏起来，所以不这么做；
  *   3. 节点按用户描述写，优先业务准确性；「能不能更短」是 optimize 命令的事，
  *      模型给建议、人批准，构建路径上不做折叠。
+ *
+ * 图的两种来路（ADR-0008）：
+ *   - `flow.json` 里手写 `nodes`（老路，兼容存量）；
+ *   - `flow.json` 只写 `entry`，节点和边从代码的 `main` 和 `"t:表名"` 标注解析（新路）。
+ *   解析本身不在这里（那是 python `ast` 的活，见 `py/flow_parse.py` 与 `flow-code.ts`），
+ *   这里只负责**形状**和**图的有效性**——解析出来的节点也照样要过这一关。
  *
  * 这一层是纯的：只做解析、校验、拓扑、摘要、优化提示。
  * 不碰文件系统、不碰数据库、不执行任何东西——执行在 flow-run.ts。
@@ -35,6 +41,24 @@ export interface MaterializeEntry {
   load?: string;
 }
 
+/** 节点内部的一句说明（来自块首字符串，或裸语句前的字符串）。 */
+export interface FlowStep {
+  /** 源码里的行号（块说明记的是 `if`/`for` 那一行）。 */
+  line: number;
+  /** block = 那个分支/循环的说明；statement = 下面那条语句的说明。 */
+  kind: 'block' | 'statement';
+  /** 块/语句的种类，例如 `if`、`for`、`Assign`。 */
+  of: string;
+  label: string;
+}
+
+/** 解析代码时的非致命提示（图能用，但有些地方值得看一眼）。 */
+export interface FlowWarning {
+  code: string;
+  message: string;
+  line: number | null;
+}
+
 export interface FlowNode {
   /** 节点名，也是它在日志和运行记录里的身份。 */
   id: NodeId;
@@ -47,6 +71,10 @@ export interface FlowNode {
   /** 额外 kwargs；值里可以用 `{db}` `{inputs}` `{out}` `{asOf}` 占位符。 */
   args?: Record<string, string>;
   timeoutMs?: number;
+  /** 节点标题（代码里的 docstring）。只用于展示，**不进摘要**。 */
+  title?: string;
+  /** 节点内部的步骤说明。只用于展示，不进摘要。 */
+  steps?: FlowStep[];
 }
 
 export interface FlowSpec {
@@ -58,7 +86,12 @@ export interface FlowSpec {
   materialize: MaterializeEntry[];
   /** 这个流程最终要产出的表（数据契约，也是双跑比对的默认范围）。 */
   outputs: string[];
+  /** 节点。为空 = 图上还没有节点，loader 会从 `entry` 指向的代码里解析。 */
   nodes: FlowNode[];
+  /** 代码即流程的入口文件（相对程序仓库）。有它就是从代码解析出来的图。 */
+  entry?: string;
+  /** 解析代码时的提示，不参与摘要。 */
+  warnings?: FlowWarning[];
 }
 
 export interface FlowEdge {
@@ -140,6 +173,18 @@ const asBatchFile = (value: unknown, where: string): string => {
   return text;
 };
 
+/** 代码即流程的默认入口：`flow.json` 不写 `entry` 时就找它。 */
+export const DEFAULT_ENTRY = 'pipeline.py';
+
+/** 入口文件：程序仓库内的相对 `.py` 路径（和 `call` 一样不许绝对路径、不许跳出去）。 */
+const asEntryPath = (value: unknown, where: string): string => {
+  const text = asString(value, where).replace(/\\/g, '/');
+  if (/^([A-Za-z]:|\/)/.test(text)) fail(`${where} 必须是程序仓库内的相对路径：${text}`);
+  if (text.split('/').some((segment) => segment === '..')) fail(`${where} 不能跳出仓库：${text}`);
+  if (!text.endsWith('.py')) fail(`${where} 必须指向一个 .py 文件：${text}`);
+  return text;
+};
+
 /**
  * 解析一个 `call`：`file.py:function` 或 `file.sql`。
  *
@@ -197,7 +242,13 @@ function parseMaterialize(raw: unknown): MaterializeEntry[] {
   });
 }
 
-/** 把外部 JSON 校验成 FlowSpec；任何一处不对都直接报错，不做默认值兜底。 */
+/**
+ * 把外部 JSON 校验成 FlowSpec；任何一处不对都直接报错，不做默认值兜底。
+ *
+ * 只做**形状**：`nodes` 写没写、`entry` 长什么样、每个字段的类型。
+ * 「这张表有没有人写」「物化边界有没有被越界」这类**图的有效性**放在 `validateFlow`——
+ * 因为节点可能来自代码解析，写 JSON 的时候还不知道有哪些节点。
+ */
 export function parseFlow(raw: unknown): FlowSpec {
   if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) fail('flow 应该是一个对象');
   const input = raw as Record<string, unknown>;
@@ -208,9 +259,18 @@ export function parseFlow(raw: unknown): FlowSpec {
   const materialize = parseMaterialize(input['materialize']);
   const outputs = asTableList(input['outputs'], 'flow.outputs');
 
-  if (!Array.isArray(input['nodes']) || input['nodes'].length === 0) fail('flow.nodes 不能为空');
+  const rawNodes = input['nodes'];
+  if (rawNodes !== undefined && !Array.isArray(rawNodes)) {
+    fail('flow.nodes 应该是数组（想从代码里解析节点就整条删掉）');
+  }
+  const nodeList = (rawNodes ?? []) as unknown[];
+  const entry = input['entry'] === undefined ? undefined : asEntryPath(input['entry'], 'flow.entry');
+  if (nodeList.length > 0 && entry !== undefined) {
+    fail('flow.json 同时写了 nodes 和 entry：二选一（写了 nodes 就不再从代码解析）');
+  }
+
   const seen = new Set<string>();
-  const nodes: FlowNode[] = input['nodes'].map((item, index) => {
+  const nodes: FlowNode[] = nodeList.map((item, index) => {
     const where = `flow.nodes[${index}]`;
     if (item === null || typeof item !== 'object' || Array.isArray(item)) fail(`${where} 应该是对象`);
     const node = item as Record<string, unknown>;
@@ -224,15 +284,6 @@ export function parseFlow(raw: unknown): FlowSpec {
 
     const reads = asTableList(node['reads'], `${where}.reads`);
     const writes = asTableList(node['writes'], `${where}.writes`);
-    if (reads.length === 0 && writes.length === 0) {
-      fail(`${where}（${id}）既不读也不写任何表：这个节点不产生任何可核对的东西`);
-    }
-    // 物化的表由物化步骤产出，节点不能再声称自己写它。
-    for (const table of writes) {
-      if (materialize.some((entry) => entry.table === table)) {
-        fail(`${where}.writes 里的 ${table} 已经由物化产出：节点不能再写它（物化是图的上游边界）`);
-      }
-    }
 
     const out: FlowNode = { id, call, reads, writes };
     if (node['args'] !== undefined) {
@@ -249,13 +300,41 @@ export function parseFlow(raw: unknown): FlowSpec {
     return out;
   });
 
-  for (const table of outputs) {
-    if (!nodes.some((node) => node.writes.includes(table))) {
+  // 没有 nodes 就是「节点从代码解析」：默认入口 pipeline.py，解析由 loader 补上。
+  if (nodes.length === 0) return { flow, db, materialize, outputs, nodes, entry: entry ?? DEFAULT_ENTRY };
+  return { flow, db, materialize, outputs, nodes };
+}
+
+/**
+ * 图的有效性检查：**解析出节点之后**才成立的那几条。
+ *
+ * 单独一个函数是因为它必须能被 `planFlow` 调用——手写 nodes 和从代码解析出来的 nodes
+ * 走的是同一套判据，不能因为来路不同就宽严不一。
+ */
+export function validateFlow(spec: FlowSpec): void {
+  if (spec.nodes.length === 0) {
+    fail(
+      `这条流没有节点：flow.json 里没写 nodes，${spec.entry ?? DEFAULT_ENTRY} 里也没解析出节点。` +
+        `（看 flow 命令的报错，解析失败会单独说明原因）`,
+    );
+  }
+  const materialized = new Set(spec.materialize.map((item) => item.table));
+  for (const node of spec.nodes) {
+    if (node.reads.length === 0 && node.writes.length === 0) {
+      fail(`节点 ${node.id} 既不读也不写任何表：这个节点不产生任何可核对的东西`);
+    }
+    // 物化的表由物化步骤产出，节点不能再声称自己写它。
+    for (const table of node.writes) {
+      if (materialized.has(table)) {
+        fail(`节点 ${node.id} 写的 ${table} 已经由物化产出：节点不能再写它（物化是图的上游边界）`);
+      }
+    }
+  }
+  for (const table of spec.outputs) {
+    if (!spec.nodes.some((node) => node.writes.includes(table))) {
       fail(`flow.outputs 里的表 ${table} 没有任何节点写它：要么补节点，要么删掉这条声明`);
     }
   }
-
-  return { flow, db, materialize, outputs, nodes };
 }
 
 /** 从 JSON 文本载入；错误里带上原因，免得模型只看到一句 `Unexpected token`。 */
@@ -271,6 +350,9 @@ export function parseFlowJson(text: string): FlowSpec {
 
 /** 把表依赖推到节点依赖，得到确定性拓扑序；有环就报出剩下的节点。 */
 export function planFlow(spec: FlowSpec): FlowPlan {
+  // 先过图的有效性这一关：节点少了、产出表没人写、越界写物化表，都在这里拦。
+  validateFlow(spec);
+
   const producedBy = new Map<string, NodeId>();
   for (const node of spec.nodes) {
     for (const table of node.writes) {
@@ -327,7 +409,16 @@ export function planFlow(spec: FlowSpec): FlowPlan {
   return { spec, order, edges, producedBy, materialized, unknownReads: [...unknown].sort(), digest: digestOf(spec) };
 }
 
-/** 规范化后取内容摘要：节点按 id 排序、列名按键排序，和文件里的写法顺序无关。 */
+/**
+ * 规范化后取内容摘要：节点按 id 排序、列名按键排序，和文件里的写法顺序无关。
+ *
+ * **刻意不算 `title` / `steps` / `entry`**：
+ *  - 标题和步骤说明是展示用的，改一句注释不该让上一轮运行的身份失效
+ *    （`optimize` 的建议绑在摘要上，注释一改就全部作废太吵）；
+ *  - `entry` 会体现在每个节点的 `call` 里，不必重复；
+ *  - 副作用是好事：同一条流「手写 nodes」和「从代码解析」必须得到同一个摘要，
+ *    这正好当等价性判据用（见 ADR-0008）。
+ */
 export function digestOf(spec: FlowSpec): string {
   const canonical = {
     flow: spec.flow,
@@ -405,10 +496,24 @@ export function suggestOptimizations(plan: FlowPlan): OptimizationHint[] {
   return hints;
 }
 
-/** CLI 里打印用：一眼看清物化、节点、边和流程外依赖。 */
-export function describeFlow(plan: FlowPlan): string[] {
+/** 把一条解析警告印成 `pipeline.py:12: xxx`（没有行号就只印文件）。 */
+export function formatFlowWarning(entry: string | undefined, warning: FlowWarning): string {
+  const where = warning.line === null || warning.line === undefined ? (entry ?? '') : `${entry ?? ''}:${warning.line}`;
+  return `${where ? `${where} ` : ''}${warning.message}`;
+}
+
+/**
+ * CLI 里打印用：一眼看清图的来路、物化、节点、边和流程外依赖。
+ *
+ * `steps` 打开时把节点内部的块说明也印出来（`flow` 命令用）——那是「点开一个节点
+ * 看到的东西」，塞进 `run` 的日志只会淹掉重点。
+ */
+export function describeFlow(plan: FlowPlan, options: { steps?: boolean } = {}): string[] {
   const lines: string[] = [];
-  lines.push(`flow ${plan.spec.flow}@${plan.digest}  db=${plan.spec.db}  节点 ${plan.spec.nodes.length}  边 ${plan.edges.length}`);
+  const graph = plan.spec.entry !== undefined ? `代码:${plan.spec.entry}` : 'flow.json';
+  lines.push(
+    `flow ${plan.spec.flow}@${plan.digest}  db=${plan.spec.db}  节点 ${plan.spec.nodes.length}  边 ${plan.edges.length}  图=${graph}`,
+  );
   lines.push(`  产出表：${plan.spec.outputs.join(', ') || '(未声明)'}`);
   for (const entry of plan.spec.materialize) {
     const sheet = entry.sheet ? `#${entry.sheet}` : '';
@@ -418,10 +523,20 @@ export function describeFlow(plan: FlowPlan): string[] {
     const node = plan.spec.nodes.find((candidate) => candidate.id === id)!;
     const reads = node.reads.length > 0 ? node.reads.join('+') : '-';
     const writes = node.writes.length > 0 ? node.writes.join('+') : '-';
-    lines.push(`  ${id.padEnd(18)} ${reads} → ${writes}   (${node.call})`);
+    const title = node.title ? `  · ${node.title}` : '';
+    lines.push(`  ${id.padEnd(18)} ${reads} → ${writes}   (${node.call})${title}`);
+    if (options.steps && node.steps) {
+      for (const step of node.steps) {
+        const mark = step.kind === 'block' ? `[${step.of}]` : '·';
+        lines.push(`      ${mark} ${step.label}  (L${step.line})`);
+      }
+    }
   }
   if (plan.unknownReads.length > 0) {
     lines.push(`  流外读：${plan.unknownReads.join(', ')}（既没物化、也没有节点产出，必须是库里的基础表）`);
+  }
+  for (const warning of plan.spec.warnings ?? []) {
+    lines.push(`  ! ${formatFlowWarning(plan.spec.entry, warning)}`);
   }
   return lines;
 }

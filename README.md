@@ -6,7 +6,7 @@
 **真实 HR 数据第一次端到端跑通**（117,776 行入库、独立核对 23/23、合入 main，见 [RESULTS](spikes/demo-real-data/RESULTS.md)）；
 **S2 harness 已插件化落地**（cordis 宿主 + 7 个插件，见 [ADR-0006](docs/adr/0006-plugin-architecture.md)）；
 **工作流是版本单位**（双跑 + 证据发布，见 [ADR-0007](docs/adr/0007-flow-as-unit.md)），
-**代码即流程**的契约已定（图从代码解析，见 [ADR-0008](docs/adr/0008-code-as-flow.md)，解析器待实现）。
+**代码即流程已落地**（图从 `main` + `"t:表名"` 解析，输入表由平台注入，见 [ADR-0008](docs/adr/0008-code-as-flow.md)）。
 产品链路（探查 → 确认 → 页面）仍未开始。
 
 ## 三条贯穿全局的约束
@@ -22,12 +22,12 @@
 | `packages/contracts` | 跨层最小契约（品牌化 ID、运行状态、执行事件、限制） |
 | `packages/session` | S1：Program/Session/Run/DataRevision 持久化、草稿与发布、恢复视图 |
 | `packages/runtime` | S3：会话工作区、排他锁、SQLite 一致性快照、干净重跑 |
-| `packages/harness` | S2：插件化宿主（cordis）+ 7 个插件（store/workspace/exec/agent-pi/telemetry/sessions/commands）+ 工作流执行（flow / flow-run / flow-source / workspace-facts）+ CLI |
+| `packages/harness` | S2：插件化宿主（cordis）+ 7 个插件（store/workspace/exec/agent-pi/telemetry/sessions/commands）+ 工作流执行（flow / flow-code / flow-run / flow-source / workspace-facts）+ 骨架 python（`py/materialize.py`、`py/node_runner.py`、`py/flow_parse.py`）+ CLI |
 | `packages/sqlmap` | SQL 表的列级血缘与两级可视化（真实库 → 可双击打开的 HTML） |
 | `packages/encoder` | 把一次运行编码成可评估的案例（事件 / 语义断言 / trace / 语料库） |
 | `vibe.plugins.yml` | 插件清单：一行一个插件，启动顺序由服务依赖决定 |
 | `spikes/m0-pi` | M0 验证程序：pi RPC 接入、独立 cwd、取消、会话恢复、环境白名单 |
-| `prompts/author-flow.md` | 写程序的提示词：代码即流程的契约 + 可运行的 few-shot（`ast` 解析器待实现） |
+| `prompts/author-flow.md` | 写程序的提示词：代码即流程的契约 + 可运行的 few-shot（由生产解析器当回归用例验证）+ 解析器的拒绝清单 |
 | `spikes/demo-real-data` | 真实数据演示台（已被 harness 接管，保留作对照与核对脚本） |
 | `runtime-env` | 数据运行时：uv 管理的 Python 3.12 + pandas + openpyxl + xlrd + sqlite3 |
 | `docs/adr` | 架构决策记录（0001 M0 · 0002 控制面/版本 · 0003 串行化/快照/重跑 · 0004 草稿与发布 · 0005 执行单元 · 0006 插件架构 · 0007 工作流是版本单位 · **0008 代码即流程**） |
@@ -68,7 +68,7 @@ Harness（S2，插件化；命令都由插件注册，加命令不用改入口�
 node packages/harness/src/main.ts plugins            # 插件清单与加载状态（含依赖关系）
 node packages/harness/src/main.ts help               # 已注册的命令
 node packages/harness/src/main.ts setup              # 程序仓库 + 会话 + 输入批次（幂等）
-node packages/harness/src/main.ts flow               # 草稿里的工作流：物化 / 节点 / 边 / 可优化项
+node packages/harness/src/main.ts flow               # 草稿里的工作流：图来路 / 物化 / 节点 / 边 / 块说明 / 可优化项
 node packages/harness/src/main.ts run                # 跑两遍：物化 → 节点 → 比对声明的产出
 node packages/harness/src/main.ts optimize           # 模型只读评审「能不能更短」，产出建议
 node packages/harness/src/main.ts optimize --apply=p1   # 只实现你批准的那一条（会提交草稿）
@@ -78,6 +78,8 @@ node packages/harness/src/main.ts status             # 恢复视图（四个版�
 
 工作流的形状见 [ADR-0007](docs/adr/0007-flow-as-unit.md)：`flow.json` 是版本单位，节点是代码里的函数，
 表是节点之间的边，物化（Excel → 表）只做映射、不允许有业务规则。
+图从代码解析见 [ADR-0008](docs/adr/0008-code-as-flow.md)：`main` 线性一次调用一个节点，
+签名上 `"t:表名"` 声明读哪张表（平台读成 DataFrame 递进去）、返回标注声明写哪张表。
 
 只有 `author` 需要 `OPENCODE_API_KEY`；`run`/`publish` 不带任何模型凭证。
 清单环境变量：`VIBE_EXCEL_STORE` / `VIBE_EXCEL_PYTHON` / `VIBE_EXCEL_AS_OF` / `VIBE_EXCEL_GROUND_TRUTH`。

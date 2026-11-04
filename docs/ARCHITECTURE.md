@@ -80,9 +80,23 @@
 | `sessions` | sessions | 上列全部 | 生命周期编排 |
 
 业务流程**不再是一个插件**：它是程序仓库里的代码本身——`flow.json` 只声明「哪个 Excel 变成哪张表」
-和「这次要交付哪几张表」，节点与边从 Python 的 `main` 和签名标注里解析出来，跟代码一起提交、一起发布。
-见 [ADR-0007](adr/0007-flow-as-unit.md) 与 [ADR-0008](adr/0008-code-as-flow.md)（**解析器待实现**，在此之前
-`flow.json` 仍需手写 `nodes`）。
+和「这次要交付哪几张表」，节点与边从 Python 的 `main` 和签名标注 `"t:表名"` 里解析出来，跟代码一起提交、一起发布。
+见 [ADR-0007](adr/0007-flow-as-unit.md) 与 [ADR-0008](adr/0008-code-as-flow.md)。
+
+图怎么来的（两段，都在 `lib` 层，不在插件里）：
+
+```
+flow.json ──parseFlow──▶ FlowSpec（只有形状：materialize / outputs / entry）
+                              │  nodes 为空？
+                              ▼
+        git show <commit>:pipeline.py ──stdin──▶ py/flow_parse.py（ast）──▶ JSON
+                              │                                          │
+                              └──flow-code.ts 翻译◀──────────────────────┘
+                              ▼
+                    validateFlow（图的有效性）──▶ planFlow（拓扑 / 环 / 悬空读）
+```
+
+解析出来的节点和手写的 `nodes` 走**同一条**校验和执行路径，不因为来路不同就宽严不一。
 
 ## 4. 版本模型：五件事，各管各的
 
@@ -109,18 +123,20 @@ run
       └─ sessions.runFlow
            ├─ workspace.withLock(会话锁)          ← 同一会话串行化的唯一入口
            ├─ git show <commit>:flow.json          ← 读的是提交，不是工作区
-           ├─ planFlow(flow)                       ← 拓扑序 / 环 / 悬空读 校验
+           ├─ 没有 nodes？git show <commit>:pipeline.py → flow_parse.py（ast）
+           ├─ planFlow(flow)                       ← 图的有效性 / 拓扑序 / 环 / 悬空读 校验
            ├─ store.beginRun(...)                  → runs 一行（status=running）
            ├─ 第 a 轮：从同一数据快照复制一份库
            │     ├─ materialize.py --spec …        ← 文件 → 表（只做映射）
            │     └─ 每个节点：node_runner.py file func --db …
-           │           └─ git worktree --detach <commit> → 全新目录
+           │           ├─ git worktree --detach <commit> → 全新目录
+           │           └─ 标的 t: 参数：从库里读成 DataFrame 再调用
            ├─ 第 b 轮：同样的输入、同样的业务日，重跑一次
            ├─ diffRounds(a, b)                     ← 比声明的产出（表 + 文件）
            ├─ 一致 → 提升第 a 轮产物，VACUUM INTO → 新数据版本
            │  不一致 → 运行失败，不提升、不登记
            ├─ store.finishRun(...)                 → 终态不可回退
-           └─ 写 run.json（flow@摘要 + 两轮记录 + identical）
+           └─ 写 run.json（flow@摘要 + graph + 两轮记录 + identical）
 ```
 
 `author` 是另一条路：`sessions.author` → `agent.run`（起 pi 子进程、白名单环境、事件流落盘）→ `commitDraft`。

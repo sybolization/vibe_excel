@@ -177,16 +177,32 @@ describe('parseFlow：合法输入', () => {
 });
 
 describe('parseFlow：形状与字段校验', () => {
-  it('顶层必须是对象；flow 名必填；db 必须以 .db 结尾；nodes 不能为空', () => {
+  it('顶层必须是对象；flow 名必填；db 必须以 .db 结尾', () => {
     expect(() => parseFlow(null)).toThrow(/flow 应该是一个对象/);
     expect(() => parseFlow([])).toThrow(/flow 应该是一个对象/);
     expect(() => parseFlow({})).toThrow(/flow\.flow/);
     expect(() => parseFlow(rawFlow({ flow: '   ' }))).toThrow(/不能为空/);
     expect(() => parseFlow(rawFlow({ db: 'hr.sqlite' }))).toThrow(/以 \.db 结尾/);
-    expect(() => parseFlow(rawFlow({ nodes: [] }))).toThrow(/nodes 不能为空/);
-    expect(() => parseFlow(rawFlow({ nodes: 'nope' }))).toThrow(/nodes 不能为空/);
+    expect(() => parseFlow(rawFlow({ nodes: 'nope' }))).toThrow(/nodes 应该是数组/);
     expect(() => parseFlow(rawFlow({ nodes: [null] }))).toThrow(/应该是对象/);
     expect(() => parseFlow(rawFlow({ materialize: {} }))).toThrow(/materialize 应该是数组/);
+  });
+
+  it('不写 nodes（或写成空数组）= 节点从代码解析，entry 缺省 pipeline.py', () => {
+    const absent = rawFlow();
+    delete absent['nodes'];
+    expect(parseFlow(absent)).toMatchObject({ nodes: [], entry: 'pipeline.py' });
+    expect(parseFlow(rawFlow({ nodes: [] }))).toMatchObject({ nodes: [], entry: 'pipeline.py' });
+    // 显式写了 entry 就用它
+    expect(parseFlow(rawFlow({ nodes: [], entry: 'src/pipeline.py' })).entry).toBe('src/pipeline.py');
+  });
+
+  it('entry 必须是仓库内的相对 .py 路径，且不能和 nodes 同时出现', () => {
+    expect(() => parseFlow(rawFlow({ nodes: [], entry: '/abs/pipeline.py' }))).toThrow(/相对路径/);
+    expect(() => parseFlow(rawFlow({ nodes: [], entry: 'C:\\code\\pipeline.py' }))).toThrow(/相对路径/);
+    expect(() => parseFlow(rawFlow({ nodes: [], entry: '../pipeline.py' }))).toThrow(/跳出仓库/);
+    expect(() => parseFlow(rawFlow({ nodes: [], entry: 'pipeline.sql' }))).toThrow(/必须指向一个 \.py/);
+    expect(() => parseFlow(rawFlow({ entry: 'pipeline.py' }))).toThrow(/二选一/);
   });
 
   it('节点 id 必须是标识符，且不能重复', () => {
@@ -213,17 +229,20 @@ describe('parseFlow：形状与字段校验', () => {
     expect(() =>
       parseFlow(rawFlow({ nodes: [rawNode({ reads: ['raw_headcount', 'raw_headcount'], writes: ['result'] })] })),
     ).toThrow(/重复声明/);
-    expect(() => parseFlow(rawFlow({ nodes: [rawNode({ reads: [], writes: [] })] }))).toThrow(/既不读也不写/);
+    // 「既不读也不写」属于图的有效性，不是形状：节点可能来自代码解析，所以放在 planFlow 这一关。
+    expect(() => planFlow(parseFlow(rawFlow({ nodes: [rawNode({ reads: [], writes: [] })] })))).toThrow(/既不读也不写/);
   });
 
   it('节点不能写物化产出的表（物化是图的上游边界）', () => {
-    const message = errorOf(() => parseFlow(rawFlow({ nodes: [rawNode({ writes: ['raw_headcount', 'result'] })] })));
+    const message = errorOf(() =>
+      planFlow(parseFlow(rawFlow({ nodes: [rawNode({ writes: ['raw_headcount', 'result'] })] }))),
+    );
     expect(message).toMatch(/物化/);
     expect(message).toContain('raw_headcount');
   });
 
   it('flow.outputs 里的表必须由某个节点写', () => {
-    expect(() => parseFlow(rawFlow({ outputs: ['result', 'ghost'] }))).toThrow(/没有任何节点写它/);
+    expect(() => planFlow(parseFlow(rawFlow({ outputs: ['result', 'ghost'] })))).toThrow(/没有任何节点写它/);
   });
 
   it('args 的键必须是参数名、值必须是字符串；timeoutMs 必须是正数', () => {
@@ -294,7 +313,8 @@ describe('parseFlowJson', () => {
 
   it('JSON 语法错误带上原因，语义错误照常抛出', () => {
     expect(() => parseFlowJson('{ not json')).toThrow(/不是合法 JSON/);
-    expect(() => parseFlowJson('{"flow":"x","nodes":[]}')).toThrow(/nodes 不能为空/);
+    // 空节点不再在解析期报错（要从代码里解析），但 planFlow 会指出「这条流没有节点」。
+    expect(() => planFlow(parseFlowJson('{"flow":"x","nodes":[]}'))).toThrow(/没有节点/);
     expect(() => parseFlowJson(JSON.stringify(rawFlow({ nodes: [rawNode({ call: '/abs/a.py:run' })] })))).toThrow(
       /绝对路径/,
     );
@@ -646,7 +666,7 @@ describe('describeFlow', () => {
     const lines = describeFlow(plan);
 
     expect(Array.isArray(lines)).toBe(true);
-    expect(lines[0]).toBe(`flow molex-prep@${plan.digest}  db=hr.db  节点 2  边 1`);
+    expect(lines[0]).toBe(`flow molex-prep@${plan.digest}  db=hr.db  节点 2  边 1  图=flow.json`);
     expect(lines[1]).toBe('  产出表：result');
     expect(lines).toContain('  [物化] molex.xlsx#Sheet1 → raw_molex（load=loaders.py:load_molex）');
 
@@ -667,5 +687,37 @@ describe('describeFlow', () => {
     expect(lines).toContain('  [物化] headcount.xlsx → raw_headcount');
     expect(lines).toContain(`  ${'build'.padEnd(18)} raw_headcount → result   (pipeline.py:build)`);
     expect(lines.some((line) => line.includes('流外读'))).toBe(false);
+  });
+
+  it('代码解析出来的图：标出来路、带上节点标题，警告以 ! 行列出，steps 打开才印块说明', () => {
+    const spec: FlowSpec = {
+      flow: 'molex-prep',
+      db: 'hr.db',
+      materialize: [],
+      outputs: ['result'],
+      entry: 'pipeline.py',
+      warnings: [{ code: 'UNUSED_TABLE_FUNC', message: 'dead_code 带表标注但 main 没调用它', line: 40 }],
+      nodes: [
+        {
+          id: 'build',
+          call: 'pipeline.py:build',
+          reads: ['raw'],
+          writes: ['result'],
+          title: '把原始表算成结果表',
+          steps: [{ line: 12, kind: 'block', of: 'if', label: '空表就别往下走' }],
+        },
+      ],
+    };
+    const plan = planFlow(spec);
+    const quiet = describeFlow(plan);
+    expect(quiet[0]).toContain('图=代码:pipeline.py');
+    expect(quiet).toContain(
+      `  ${'build'.padEnd(18)} raw → result   (pipeline.py:build)  · 把原始表算成结果表`,
+    );
+    expect(quiet).toContain('  ! pipeline.py:40 dead_code 带表标注但 main 没调用它');
+    expect(quiet.some((line) => line.includes('空表就别往下走'))).toBe(false);
+
+    const verbose = describeFlow(plan, { steps: true });
+    expect(verbose).toContain('      [if] 空表就别往下走  (L12)');
   });
 });
