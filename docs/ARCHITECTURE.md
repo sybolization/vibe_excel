@@ -10,7 +10,7 @@
 ```
 ┌─ 代码仓库 C:\project\vibe_excel ────────────────────────────────┐
 │  packages/contracts   packages/session   packages/runtime        │
-│  packages/harness（宿主 + 9 个插件）   vibe.plugins.yml（清单）   │
+│  packages/harness（宿主 + 7 个插件）   vibe.plugins.yml（清单）   │
 │  spikes/*（验证与演示，不是产品代码）   docs/*  runtime-env/*      │
 └──────────────────────────────────────────────────────────────────┘
                     │ 只在运行时通过路径约定引用
@@ -40,7 +40,8 @@
 - **库层**：`contracts` 只有类型；`session` 是控制面 + git 草稿/发布；`runtime` 是工作区、锁、快照、干净重跑。
   三者可以被 vitest 直接调用，不需要起宿主。
 - **插件层**：一共 7 个源文件管宿主（`host.ts` / `manifest.ts` / `cli.ts` / `kernel.ts` / `main.ts` / `fs-util.ts` / `index.ts`）
-  加 9 个插件文件。插件只做适配与编排，不实现存储或执行。
+  加 7 个插件文件（`store` / `workspace` / `exec` / `agent-pi` / `telemetry` / `sessions` / `commands`）。
+  插件只做适配与编排，不实现存储或执行。
 - **清单**：一行一个插件，谁依赖谁写在 `inject` / `provide` 里。
 
 跨包 import 实测只有四条边：`session→contracts`、`runtime→contracts`、`harness→{contracts,session,runtime}`。没有环。
@@ -50,18 +51,22 @@
 宿主动词只有三个：`provide` / `inject` / `apply`。启动顺序**由服务可用性决定**，不由清单行序决定。
 
 ```
-        ┌──────────┐   ┌───────────┐   ┌───────┐   ┌──────┐   ┌──────────┐   ┌────────┐
-        │ commands │   │ telemetry │   │ store │   │ exec │   │ agent-pi │   │ stages │
-        └────┬─────┘   └─────┬─────┘   └───┬───┘   └──┬───┘   └────┬─────┘   └───┬────┘
-             │               │             │          │            │             │
-             │               │        ┌────▼──────┐   │            │        ┌────▼──────────┐
-             │               │        │ workspace │   │            │        │ stage-molex   │
-             │               │        └────┬──────┘   │            │        └───────────────┘
-             └───────────────┴─────────────┴──────────┴────────────┴──────────────────┘
+        ┌──────────┐   ┌───────────┐   ┌───────┐   ┌──────┐   ┌──────────┐
+        │ commands │   │ telemetry │   │ store │   │ exec │   │ agent-pi │
+        └────┬─────┘   └─────┬─────┘   └───┬───┘   └──┬───┘   └────┬─────┘
+             │               │             │          │            │
+             │               │        ┌────▼──────┐   │            │
+             │               │        │ workspace │   │            │
+             │               │        └────┬──────┘   │            │
+             └───────────────┴─────────────┴──────────┴────────────┘
                                              │
                                        ┌─────▼──────┐
-                                       │  sessions  │  ← 编排 + 注册 8 条命令
-                                       └────────────┘
+                                       │  sessions  │  ← 编排 + 注册 7 条命令
+                                       └─────┬──────┘
+                                             │ 按 commit 读 flow.json
+                                       ┌─────▼──────┐   ┌──────────┐
+                                       │  flow-run  │──▶│ 节点函数  │
+                                       └────────────┘   └──────────┘
 ```
 
 | 服务 | 提供者 | 依赖 | 一句话 |
@@ -72,9 +77,12 @@
 | `workspace` | workspace | store | 目录布局 + 会话排他锁 |
 | `exec` | exec | — | 干净 worktree 里执行入口契约 |
 | `agent` | agent-pi | — | pi 子进程（凭证只在这里进子进程） |
-| `stages` | stages | — | 阶段包注册表 |
-| — | stage-molex | stages | 业务包：molex-prep 的 import / analyze |
 | `sessions` | sessions | 上列全部 | 生命周期编排 |
+
+业务流程**不再是一个插件**：它是程序仓库里的代码本身——`flow.json` 只声明「哪个 Excel 变成哪张表」
+和「这次要交付哪几张表」，节点与边从 Python 的 `main` 和签名标注里解析出来，跟代码一起提交、一起发布。
+见 [ADR-0007](adr/0007-flow-as-unit.md) 与 [ADR-0008](adr/0008-code-as-flow.md)（**解析器待实现**，在此之前
+`flow.json` 仍需手写 `nodes`）。
 
 ## 4. 版本模型：五件事，各管各的
 
@@ -83,37 +91,44 @@
 | 东西 | 存在哪 | 谁写的 | 用来回答 |
 |---|---|---|---|
 | **代码版本** `code_commit` | `runs.code_commit` + git | `beginRun` 时取 `draftHead` | 这次跑的是哪版程序 |
-| **数据版本** `data_revision_id` | `data_revisions` + `data-revisions/<sha>.db` | 阶段声明 `mutatesDatabase` 后自动快照 | 这次读的是哪版业务库 |
+| **工作流版本** `flow@<12>` | 程序仓库里的 `flow.json`，摘要写进 `run.json` | 模型写、跟代码一起提交 | 这次跑的是哪条流（物化 + 产出表） |
+| **数据版本** `data_revision_id` | `data_revisions` + `data-revisions/<sha>.db` | 两轮一致后才自动快照 | 这次读的是哪版业务库 |
 | **输入批次** `input_batch_id` | `sessions/<id>/work/inputs/<batchId>/` | `setup` 内容寻址复制 | 这批原始文件是哪一份 |
 | **制品** | `artifacts` 表 | run 结束按声明产出的哈希 | 输出了什么、多大、什么哈希 |
-| **发布** | `publishes` 表 | `publish --verify=<证据>` | 谁在什么时候、凭哪份证据合进 main |
+| **发布** | `publishes` 表 | `publish` 读 `run.json` 的两轮证据 | 谁在什么时候、凭哪份证据合进 main |
 
-关键点：`data_revision_id` 记的是**输入**版本，不是产出。产出走 `artifacts`；改了库的阶段会再产生一个新的数据版本给下一次用。
+关键点：`data_revision_id` 记的是**输入**版本，不是产出。产出走 `artifacts`；一次成功的运行会再产生一个新的数据版本给下一次用。
 
 ## 5. 一次 `run` 的时序
 
 ```
 CLI 进程                     cordis 宿主               子进程 / 磁盘
 ─────────────────────────────────────────────────────────────────────────────
-run --stage=analyze
+run
   └─ commands 找到命令
-      └─ sessions.runStage
+      └─ sessions.runFlow
            ├─ workspace.withLock(会话锁)          ← 同一会话串行化的唯一入口
-           ├─ store.listDataRevisions[0]           ← 输入数据版本
+           ├─ git show <commit>:flow.json          ← 读的是提交，不是工作区
+           ├─ planFlow(flow)                       ← 拓扑序 / 环 / 悬空读 校验
            ├─ store.beginRun(...)                  → runs 一行（status=running）
-           ├─ stages.get('analyze')                ← 阶段模板 + 输出声明
-           ├─ exec.run({commit, entry, args})
-           │     └─ git worktree --detach <commit> → 全新目录
-           │     └─ spawn python analyze.py …       → 业务库只读、产出写到 work/out
+           ├─ 第 a 轮：从同一数据快照复制一份库
+           │     ├─ materialize.py --spec …        ← 文件 → 表（只做映射）
+           │     └─ 每个节点：node_runner.py file func --db …
+           │           └─ git worktree --detach <commit> → 全新目录
+           ├─ 第 b 轮：同样的输入、同样的业务日，重跑一次
+           ├─ diffRounds(a, b)                     ← 比声明的产出（表 + 文件）
+           ├─ 一致 → 提升第 a 轮产物，VACUUM INTO → 新数据版本
+           │  不一致 → 运行失败，不提升、不登记
            ├─ store.finishRun(...)                 → 终态不可回退
-           ├─ 对每个产出算 sha256 → store.addArtifact
-           └─ 若声明了 mutatesDatabase：
-                 VACUUM INTO → data-revisions/<sha>.db
-                 store.registerDataRevision          → 下一个 run 的输入版本
+           └─ 写 run.json（flow@摘要 + 两轮记录 + identical）
 ```
 
 `author` 是另一条路：`sessions.author` → `agent.run`（起 pi 子进程、白名单环境、事件流落盘）→ `commitDraft`。
 **写程序**和**跑程序**是分开的两步：模型写的时候在草稿 worktree 里调试，跑的时候一定在 detached worktree 里、一定对应某个 commit、一定不带模型凭证。
+
+写程序之前先探测一次工作区（`workspace-facts.ts`）：库在哪、多大、有几张表，python 在哪、哪个版本、venv 是不是 uv 建的、装了哪些包，输入批次里有什么文件。
+探测结果有**两个出口**：填进提示词的 `{{WORKSPACE}}`，以及写成 `<session>/agent/AGENTS.md`——pi 会把它当 context file 自动读，所以模型在整个会话里随时能查，而不只是提示词开头那一段。
+**为什么必须探测而不是写死**：路径会变（换机器、目录搬家、venv 被 uv 重建），写死的句子在路径失效时会安静地变成谎言。探测不到的项一律落到「缺的东西」，给可执行的下一步（`uv pip install xlrd` / `vibectl setup`），而不是一句 missing。
 
 ## 6. 落盘布局
 
@@ -131,6 +146,7 @@ run --stage=analyze
     │   ├── hr.db                  业务库（WAL）
     │   └── out/<stage>/           阶段产出
     ├── agent/  sessions/          每会话独立的 pi 配置与会话文件
+    │   └── AGENTS.md              每次 author/optimize 前重写的工作区事实（pi 自动读）
     └── runs/<runId>/
         ├── run.json               这次运行的全部事实（commit/版本/退出码/哈希）
         ├── clean/                 本次执行的 detached worktree 产物与 manifest
@@ -157,15 +173,19 @@ run --stage=analyze
 | 控制面（SQLite → Postgres） | `store` 插件 | 0 |
 | 轨迹出口（文件 → OTel） | `telemetry` 插件 | 0 |
 | 入口（CLI → HTTP） | `commands` 插件 + 一个 HTTP 宿主 | 0 |
-| **业务流程**（molex → 周报） | `stage-molex` → `stage-weekly` | 0 |
+| **业务流程**（molex → 周报） | 程序仓库里的代码 + `flow.json` | 0 |
 | 宿主框架本身 | `host.ts` + `kernel.ts` 的 `PluginContext` | 插件写法不变（ADR-0006 决策 7） |
 
 ## 9. 不存在的（别以为有）
 
-1. 没有 `confirmations` 服务：模型提的待确认项只落在一份 JSON 里，**没人能点确认**。
-2. 没有 `verifiers` 服务：`verify` 只做"同 commit 跑两次比哈希"，业务正确性靠外部脚本核对。
-3. 没有 Web / client 半边：`apps/web` 空着，插件模型还没往 UI 延伸。
-4. 没有评测：`packages/eval` 空着，零任务、零 baseline。
-5. 没有热重载、没有分发包、没有插件级权限（ADR-0006 §8）。
+1. 没有 `confirmations` 服务：模型提的待确认项只落在一份 JSON 里；能实时问答的只有 `ask_user`
+   （模型问、人答、答案写回并落进 `questions.jsonl`），没有「点确认」的界面。
+2. 没有 `verifiers` 服务：双跑只证明"同一 commit 两次结果一致"，业务正确性仍靠外部脚本核对。
+3. 没有「全库双跑比对」：现在只比声明的产出（`outputs` 表 + out 文件），因为 `meta.created_at` 这类非确定内容还没被禁掉。
+4. 没有「自动优化」：`optimize` 只会**建议**（模型在只读 worktree 里评审），`--apply=<id>` 只实现被批准的那一条；
+   机器自己不会改流程。
+5. 没有 Web / client 半边：`apps/web` 空着，插件模型还没往 UI 延伸。
+6. 没有评测：`packages/eval` 空着，零任务、零 baseline。
+7. 没有热重载、没有分发包、没有插件级权限（ADR-0006 §8）。
 6. 没有多会话并发的实测；锁不跨机器。
 7. 没有工作区写入约束（Windows 上没有可用的 OS 级沙箱，ADR-0001 缺口 13）。

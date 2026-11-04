@@ -4,7 +4,9 @@
 
 当前进度：**M0 已完成**（[ADR-0001](docs/adr/0001-pi-integration.md)）；**S1/S3 已落地并有测试**；
 **真实 HR 数据第一次端到端跑通**（117,776 行入库、独立核对 23/23、合入 main，见 [RESULTS](spikes/demo-real-data/RESULTS.md)）；
-**S2 harness 已插件化落地**（cordis 宿主 + 9 个插件，见 [ADR-0006](docs/adr/0006-plugin-architecture.md)）。
+**S2 harness 已插件化落地**（cordis 宿主 + 7 个插件，见 [ADR-0006](docs/adr/0006-plugin-architecture.md)）；
+**工作流是版本单位**（双跑 + 证据发布，见 [ADR-0007](docs/adr/0007-flow-as-unit.md)），
+**代码即流程**的契约已定（图从代码解析，见 [ADR-0008](docs/adr/0008-code-as-flow.md)，解析器待实现）。
 产品链路（探查 → 确认 → 页面）仍未开始。
 
 ## 三条贯穿全局的约束
@@ -20,12 +22,15 @@
 | `packages/contracts` | 跨层最小契约（品牌化 ID、运行状态、执行事件、限制） |
 | `packages/session` | S1：Program/Session/Run/DataRevision 持久化、草稿与发布、恢复视图 |
 | `packages/runtime` | S3：会话工作区、排他锁、SQLite 一致性快照、干净重跑 |
-| `packages/harness` | S2：插件化宿主（cordis）+ 9 个插件（store/workspace/exec/agent-pi/telemetry/stages/stage-molex/sessions/commands）+ CLI |
+| `packages/harness` | S2：插件化宿主（cordis）+ 7 个插件（store/workspace/exec/agent-pi/telemetry/sessions/commands）+ 工作流执行（flow / flow-run / flow-source / workspace-facts）+ CLI |
+| `packages/sqlmap` | SQL 表的列级血缘与两级可视化（真实库 → 可双击打开的 HTML） |
+| `packages/encoder` | 把一次运行编码成可评估的案例（事件 / 语义断言 / trace / 语料库） |
 | `vibe.plugins.yml` | 插件清单：一行一个插件，启动顺序由服务依赖决定 |
 | `spikes/m0-pi` | M0 验证程序：pi RPC 接入、独立 cwd、取消、会话恢复、环境白名单 |
+| `prompts/author-flow.md` | 写程序的提示词：代码即流程的契约 + 可运行的 few-shot（`ast` 解析器待实现） |
 | `spikes/demo-real-data` | 真实数据演示台（已被 harness 接管，保留作对照与核对脚本） |
 | `runtime-env` | 数据运行时：uv 管理的 Python 3.12 + pandas + openpyxl + xlrd + sqlite3 |
-| `docs/adr` | 架构决策记录（0001 M0 · 0002 控制面/版本 · 0003 串行化/快照/重跑 · 0004 草稿与发布 · 0005 执行单元 · 0006 插件架构） |
+| `docs/adr` | 架构决策记录（0001 M0 · 0002 控制面/版本 · 0003 串行化/快照/重跑 · 0004 草稿与发布 · 0005 执行单元 · 0006 插件架构 · 0007 工作流是版本单位 · **0008 代码即流程**） |
 | `docs/ARCHITECTURE.md` | **当前架构**：三层代码、服务图、版本模型、一次 run 的时序、落盘布局、边界 |
 
 尚未开始：`packages/eval`、`packages/growth`、`apps/web`。
@@ -46,7 +51,7 @@ pnpm install
 
 ```powershell
 pnpm typecheck                      # tsc 类型检查（含 erasableSyntaxOnly）
-pnpm test                           # vitest：session + runtime 两套测试
+pnpm test                           # vitest：12 个文件 / 135 项，含 setup→run→publish 的端到端用例
 uv run --project runtime-env python runtime-env/smoke.py   # 数据运行时冒烟测试
 
 # M0 验证（需要 OPENCODE_API_KEY 在环境里）
@@ -63,16 +68,21 @@ Harness（S2，插件化；命令都由插件注册，加命令不用改入口�
 node packages/harness/src/main.ts plugins            # 插件清单与加载状态（含依赖关系）
 node packages/harness/src/main.ts help               # 已注册的命令
 node packages/harness/src/main.ts setup              # 程序仓库 + 会话 + 输入批次（幂等）
-node packages/harness/src/main.ts run --stage=analyze    # 干净 worktree 里按 commit 执行
-node packages/harness/src/main.ts verify --stage=analyze # 同 commit 跑两次比内容哈希
-node packages/harness/src/main.ts publish --verify=<verify.json>
+node packages/harness/src/main.ts flow               # 草稿里的工作流：物化 / 节点 / 边 / 可优化项
+node packages/harness/src/main.ts run                # 跑两遍：物化 → 节点 → 比对声明的产出
+node packages/harness/src/main.ts optimize           # 模型只读评审「能不能更短」，产出建议
+node packages/harness/src/main.ts optimize --apply=p1   # 只实现你批准的那一条（会提交草稿）
+node packages/harness/src/main.ts publish [--run=<id>]   # 只发布带「两次一致」证据的运行
 node packages/harness/src/main.ts status             # 恢复视图（四个版本引用）
 ```
 
-只有 `author` 需要 `OPENCODE_API_KEY`；`run`/`verify` 不带任何模型凭证。
+工作流的形状见 [ADR-0007](docs/adr/0007-flow-as-unit.md)：`flow.json` 是版本单位，节点是代码里的函数，
+表是节点之间的边，物化（Excel → 表）只做映射、不允许有业务规则。
+
+只有 `author` 需要 `OPENCODE_API_KEY`；`run`/`publish` 不带任何模型凭证。
 清单环境变量：`VIBE_EXCEL_STORE` / `VIBE_EXCEL_PYTHON` / `VIBE_EXCEL_AS_OF` / `VIBE_EXCEL_GROUND_TRUTH`。
 
-真实数据演示（旧脚手架，保留作对照）：
+真实数据演示（旧脚手架，保留作对照；它仍在用 `--stage`，不跟随新契约）：
 
 ```powershell
 node spikes/demo-real-data/src/main.ts setup
@@ -85,12 +95,15 @@ node spikes/demo-real-data/src/main.ts status
 
 ## 怎么看一次运行到底做了什么
 
-每次检查在制品根留下一个 run 目录，固定四类产物：
+每次检查在制品根留下一个 run 目录：
 
 | 文件 | 内容 | 用途 |
 |---|---|---|
+| `run.json` | 这次跑的是哪条流（`flow@摘要`）、两轮记录、`identical` | 发布证据；不一致时点名哪张表/哪个文件 |
+| `a/` `b/` | 两轮各自的库、`out/`、干净 worktree 日志 | 逐轮对照，不靠猜 |
 | `events.jsonl` | RPC 原始事件流，逐条不加工（有体积上限） | 机器可查的全部事实 |
 | `timeline.txt` | 折叠掉流式增量的时间线（时间 / 类型 / 工具名 / 摘要） | 人一眼看完它做了什么 |
+| `questions.jsonl` | 模型中途问人的每一问一答 | 「这个口径是谁定的」的证据 |
 | `sessions/*.jsonl` | pi 自己的会话文件 | 可 `--continue` 恢复，可审计 |
 | `*.html` | 会话经 `pi --export` 导出的页面 | 含每条消息的 token 与成本 |
 

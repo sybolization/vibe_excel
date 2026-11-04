@@ -11,6 +11,10 @@
 
 ---
 
+> **本文是 2026-10-30 的状态快照，其中的计数与插件清单已过时**（当时 9 个插件、29 项测试、还有 `stages`）。
+> 当前状态看 [HANDOFF.md](HANDOFF.md)；决策依据看 [ADR-0007](adr/0007-flow-as-unit.md) 与 [ADR-0008](adr/0008-code-as-flow.md)。
+> 下面保留原文，是因为「为什么当时这么想」本身是记录。
+
 ## 一、做了什么
 
 ### 1. 工程基线
@@ -87,12 +91,12 @@ uv 管理 **CPython 3.12.14**；pandas 2.3.3 / openpyxl 3.1.5 / SQLite 3.53.1，
 | `workspace` | workspace | store | 每会话目录 + 排他锁 |
 | `exec` | exec | — | 干净 worktree 里的入口契约执行 |
 | `agent-pi` | agent | — | pi 子进程（凭证只在这里进子进程） |
-| `stages` | stages | — | 阶段包注册表 |
-| `stage-molex` | — | stages | **业务包**：molex-prep 的两个阶段 |
-| `sessions` | sessions | 上列全部 | 生命周期编排 + 8 条命令 |
+| `sessions` | sessions | 上列全部 | 生命周期编排 + 7 条命令 |
 
-验证：9 个插件全部 ACTIVE；在演示台留下的同一份 `control.db` 上跑 `run --stage=analyze`，
-4 个产出与演示台产物 **sha256 逐文件相同**；测试 29 项（新增 6 项覆盖清单/补丁/依赖启动/FAILED）。
+业务流**不再是插件**：`flow.json` 跟代码一起版本化（ADR-0007），原来的 `stages` / `stage-molex` 两个插件已删除。
+
+验证：7 个插件全部 ACTIVE；`run` 默认双跑，跑的是「物化 → 节点」整条流；
+`publish` 只认 `run.json` 里的两次一致证据。测试 106 项。
 
 ---
 
