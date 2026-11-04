@@ -38,15 +38,19 @@ export interface TableDigest {
  * 反过来，字节相同也不代表内容一样（有 -wal 时主文件可能落后）。按行序列化再哈希，
  * 比较的才是"数据本身"。
  */
-export function databaseDigest(dbPath: string): Record<string, TableDigest> {
+export function databaseDigest(dbPath: string, only?: string[]): Record<string, TableDigest> {
   if (!existsSync(dbPath)) return {};
+  const wanted = only === undefined ? null : new Set(only);
   const db = new DatabaseSync(dbPath, { readOnly: true });
   try {
     const tables = (
       db
         .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name")
         .all() as { name: string }[]
-    ).map((row) => row.name);
+    )
+      .map((row) => row.name)
+      // 只算关心的表时也要走同一条 SQL：表不存在就不出现在结果里，调用方据此判断「没写」。
+      .filter((name) => wanted === null || wanted.has(name));
     const out: Record<string, TableDigest> = {};
     for (const table of tables) {
       const hasher = createHash('sha256');

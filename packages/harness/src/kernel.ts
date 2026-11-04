@@ -14,6 +14,8 @@ import type { DataRevisionId, ProgramId, RunId, SessionId } from '@vibe-excel/co
 import type { Program, Run, Session, SessionStore } from '@vibe-excel/session';
 import type { WorkspacePaths } from '@vibe-excel/runtime';
 
+import type { FlowProposal } from './optimize.ts';
+
 /* ------------------------------------------------------------------ *
  * 服务
  * ------------------------------------------------------------------ */
@@ -66,12 +68,21 @@ export interface ExecService {
   interpreter(): string;
 }
 
+export interface AskQuestion {
+  /** pi 侧的请求 id（回答必须带同一个 id）。 */
+  id: string;
+  question: string;
+  options: string[];
+}
+
 export interface AgentRequest {
   cwd: string;
   agentDir: string;
   sessionDir: string;
   prompt: string;
   timeoutMs?: number;
+  /** 模型中途提问：由宿主显示给用户并返回回答；返回 undefined 表示未回答。 */
+  onQuestion?: (question: AskQuestion) => Promise<string | undefined>;
   /** 每收到一条 RPC 事件回调一次（由 telemetry 负责落盘）。 */
   onEvent?: (raw: unknown) => void;
 }
@@ -126,28 +137,6 @@ export interface CommandsService {
   find(name: string): CommandSpec | undefined;
 }
 
-export interface StageSpec {
-  entry: string;
-  /** 模板：`{inputs}` `{db}` `{out}` `{asOf}` 会被替换成绝对路径。 */
-  args: string[];
-  outputs: string[];
-  timeoutMs?: number;
-  /** 该阶段会改写业务库：成功后就地快照成一个新的数据版本，并把库本身登记为制品。 */
-  mutatesDatabase?: boolean;
-}
-
-export interface StagePack {
-  /** 包名，例如 molex-prep；同一阶段名在不同包里可以重名。 */
-  pack: string;
-  stages: Record<string, StageSpec>;
-}
-
-export interface StagesService {
-  register(pack: StagePack): void;
-  packs(): StagePack[];
-  get(stage: string): { pack: string; spec: StageSpec };
-}
-
 export interface AuthorResult {
   commit: string | null;
   elapsedMs: number;
@@ -160,16 +149,13 @@ export interface RunResult {
   runId: RunId;
   status: string;
   exitCode: number;
+  /** 两次干净重跑是否一致。每次运行都跑两遍，这个字段是运行的一部分，不是一个单独阶段。 */
+  identical: boolean;
+  /** 这次运行跑的是哪个版本的工作流（`flow@<12>`）。 */
+  flowDigest: string;
   outputs: { path: string; sha256: string; bytes: number }[];
   outRevisionId: DataRevisionId | null;
   runDir: string;
-}
-
-export interface VerifyResult {
-  evidencePath: string;
-  identical: boolean;
-  stage: string;
-  commit: string;
 }
 
 export interface StatusView {
@@ -190,13 +176,27 @@ export interface SetupResult {
   reused: boolean;
 }
 
+export interface OptimizeResult {
+  mode: 'review' | 'apply';
+  traceDir: string;
+  /** 建议文件的绝对路径（apply 时用它复现「当初建议的是什么」）。 */
+  proposalPath: string;
+  /** review 时是全部建议；apply 时是被采纳的那一条。 */
+  proposals: FlowProposal[];
+  /** 只有 apply 会提交；review 永远是 null。 */
+  commit: string | null;
+}
+
 export interface SessionsService {
   /** 建程序仓库 / 会话 / 输入批次 / 空库基线；重复调用是幂等的。 */
   setup(): SetupResult;
   author(input: { promptFile: string; label: string; timeoutMs?: number }): Promise<AuthorResult>;
-  runStage(input: { stage: string; asOf?: string }): RunResult;
-  verifyStage(input: { stage: string; asOf?: string }): VerifyResult;
-  publish(input: { verifyPath: string }): { commit: string; note: string | null };
+  /** 跑整条工作流两遍：物化 → 节点 → 比对声明的产出。不一致就算失败。 */
+  runFlow(input: { asOf?: string }): RunResult;
+  /** 只发布带「两次一致」证据的运行；没有证据就不合入。 */
+  publish(input: { runId?: string }): { commit: string; note: string | null };
+  /** 模型自检「能不能更短」；不带 apply 是只读评审，带 apply 只实现被批准的那一条。 */
+  optimize(input: { apply?: string; from?: string; timeoutMs?: number }): Promise<OptimizeResult>;
   status(): StatusView;
 }
 
@@ -288,7 +288,6 @@ export const SERVICE_NAMES = [
   'agent',
   'telemetry',
   'commands',
-  'stages',
   'sessions',
 ] as const;
 

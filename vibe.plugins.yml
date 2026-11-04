@@ -41,12 +41,8 @@ plugins:
       timeoutMs: 1500000
 
   # —— 业务插件 ——
-  # 阶段注册表 + 一个业务包。换业务流程 = 换/加一个这样的插件，编排器一行不改。
-  - id: stages
-    name: ./packages/harness/src/plugins/stages.ts
-
-  - id: stage-molex
-    name: ./packages/harness/src/plugins/stage-molex.ts
+  # 业务流程不再由插件声明阶段：它写在程序仓库的 flow.json 里（物化 + 节点 + 表边），
+  # 跟着代码一起版本化。这个清单里不再需要「阶段包」这种行。
 
   # —— 编排 ——
   - id: sessions
