@@ -29,9 +29,12 @@
 2. **签名上的 `"t:表名"` 说明这个参数或返回值承载哪张表。**
    `def clean_employees(db, raw: "t:raw_employees") -> "t:employees"` 读作：吃一张 `raw_employees`，产出一张 `employees`。
 3. **每个函数体第一句是 docstring**，一句话说清它算出什么。这句话就是流程图上的节点标题。
-4. **函数体内部的块也可以写 `"""…"""`**：`if` / `for` / `while` 的第一句写一句人话，就是那个块的说明。
+4. **`def` 上一行写 `# name：中文名`**，这是节点在界面上的名字。函数名是英文标识符，
+   给人看的是这一行——`# name：清洗岗位` 写在 `def clean_positions(` 的上一行，
+   中间不留空行、不留注释块。名字别超过 8 个字，它是标签不是句子。
+5. **函数体内部的块也可以写 `"""…"""`**：`if` / `for` / `while` 的第一句写一句人话，就是那个块的说明。
    裸语句前面**可以**写（不强制），写了就当这条语句的说明，不写也能解析。
-5. **表名必须是字面量**，禁止 `f"t:{x}"` 这种拼出来的。
+6. **表名必须是字面量**，禁止 `f"t:{x}"` 这种拼出来的。
 
 ### 输入表由平台递给你，写表是你自己的事
 
@@ -90,6 +93,7 @@ def main(db, as_of: str = "2026-10-23"):
     return match_available(db, employees, positions, as_of)
 
 
+# name：清洗员工
 def clean_employees(db, raw: "t:raw_employees") -> "t:employees":
     """清洗花名册：去重、补主管、统一岗位号。"""
     """同一 ID 只留一行"""
@@ -178,7 +182,8 @@ if __name__ == "__main__":
 | `clean_employees` 的参数 `"t:raw_employees"` | 一条边 `raw_employees → employees` |
 | `clean_positions` 的返回值 `"t:available_positions"` | 这张表的生产者是 `clean_positions` |
 | `match_available` 的两个参数标注 | 两条边：`employees → match_result`、`available_positions → match_result` |
-| 函数 docstring | 节点标题 |
+| 函数 docstring | 节点标题（一句话） |
+| `def` 上一行的 `# name：中文` | 节点在界面上的名字（标签） |
 | `if` / `for` 块里的 `"""…"""` | 节点内部的步骤说明（点开才看得到） |
 | `fill_manager` 这类没标注的表内辅助函数 | **不是节点**，是内部步骤 |
 

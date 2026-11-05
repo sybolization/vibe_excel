@@ -357,6 +357,7 @@ describe("buildDiagram", () => {
         fn: "build_a",
         file: "p.py",
         title: "",
+        name: "生成 A 表",
         reads: ["raw_a"],
         writes: ["a"],
         elapsedMs: 1200,

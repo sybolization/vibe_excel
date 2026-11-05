@@ -19,9 +19,11 @@ from __future__ import annotations
 
 import ast
 import builtins
+import io
 import json
 import re
 import sys
+import tokenize
 import traceback
 
 # 平台固定递给节点的入参（`flow-run.ts` 的 kwargs）。它们不需要表标注。
@@ -305,7 +307,29 @@ def _collect_steps(fn: ast.FunctionDef) -> list[dict[str, object]]:
     return steps
 
 
-def _describe_node(fn: ast.FunctionDef, name: str) -> dict[str, object]:
+# `# name：中文` —— 节点在流程图上的名字。
+# 只认紧挨着 `def` 上一行的这一行注释（不留空行），不认函数体里的：
+# 一个名字写在声明旁边，改函数时顺手就会一起改。
+NAME_COMMENT_RE = re.compile(r"#\s*name\s*[:：]\s*(\S[^\n]*?)\s*$", re.IGNORECASE)
+
+
+def _collect_name_comments(source: str) -> dict[int, str]:
+    """行号 → 中文名。解析不出来就返回空表：名字只影响展示，不该让整条流程失败。"""
+    out: dict[int, str] = {}
+    try:
+        tokens = tokenize.generate_tokens(io.StringIO(source).readline)
+        for token in tokens:
+            if token.type != tokenize.COMMENT:
+                continue
+            matched = NAME_COMMENT_RE.search(token.string)
+            if matched:
+                out[token.start[0]] = matched.group(1).strip()
+    except (tokenize.TokenError, IndentationError):
+        return {}
+    return out
+
+
+def _describe_node(fn: ast.FunctionDef, name: str, names: dict[int, str]) -> dict[str, object]:
     line = fn.lineno
     title = ast.get_docstring(fn, clean=True)
     if title is None or title.strip() == "":
@@ -383,6 +407,7 @@ def _describe_node(fn: ast.FunctionDef, name: str) -> dict[str, object]:
         "reads": reads,
         "writes": writes,
         "steps": _collect_steps(fn),
+        **({"name": names[fn.lineno - 1]} if (fn.lineno - 1) in names else {}),
     }
 
 
@@ -400,6 +425,7 @@ def parse(source: str, entry: str) -> dict[str, object]:
             error.lineno,
         ) from error
 
+    names = _collect_name_comments(source)
     sync_defs, async_names = _module_functions(tree)
     main = _find_main(tree)
     _check_main_params(main)
@@ -419,7 +445,7 @@ def parse(source: str, entry: str) -> dict[str, object]:
                 fn.lineno,
             )
         seen.add(name)
-        nodes.append(_describe_node(fn, name))
+        nodes.append(_describe_node(fn, name, names))
 
     # 带表标注却没被 main 调用：多半是模型以为它已经进图了。
     for name, fn in sync_defs.items():

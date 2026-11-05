@@ -49,6 +49,7 @@ function readNodes(value: unknown): NodeView[] {
       fn: call.includes(":") ? call.slice(call.lastIndexOf(":") + 1) : id,
       file: call.includes(":") ? call.slice(0, call.lastIndexOf(":")) : call,
       title: asString(item["title"]) ?? "",
+    name: asString(item["name"]) ?? "",
       reads: stringList(item["reads"]),
       writes: stringList(item["writes"]),
       elapsedMs: null,

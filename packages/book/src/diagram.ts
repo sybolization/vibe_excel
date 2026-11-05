@@ -35,6 +35,7 @@ const sheetIdOf = (file: string, sheet: string): string => `s:${file}\u0000${she
 const computeIdOf = (runShort: string, fn: string): string => `c:${runShort}\u0000${fn}`;
 
 const blank = {
+  name: "",
   rows: null,
   columns: null,
   bytes: null,
@@ -161,6 +162,7 @@ export function buildDiagram(input: BuildDiagramInput): DiagramView | null {
         kind: "compute",
         ref: writer.fn,
         label: writer.fn,
+        name: writer.name,
         rank: 3,
         run: runFns.has(`${writer.runShort}\u0000${writer.fn}`) && row.usage !== null,
         loose: false,

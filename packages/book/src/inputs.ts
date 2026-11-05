@@ -87,6 +87,8 @@ interface MaterializeEdge {
 interface DeriveEdge {
   from: string[];
   via: string;
+  /** 代码里 `# name：中文`，空串表示没有声明。 */
+  name: string;
   /** 节点所在的代码文件、耗时、出处运行——画布上要画成一个真的节点。 */
   file: string;
   elapsedMs: number | null;
@@ -154,13 +156,14 @@ function deriveEdges(runs: RunRecord[]): Map<string, DeriveEdge> {
       const call = asString(node["call"]) ?? asString(node["id"]) ?? "—";
       const cut = call.lastIndexOf(":");
       const via = cut === -1 ? call : call.slice(cut + 1);
+      const nodeName = asString(node["name"]) ?? "";
       const file = cut === -1 ? "" : call.slice(0, cut);
       const nodeId = asString(node["id"]);
       const elapsedMs = asNumber(node["elapsedMs"]) ?? (nodeId === null ? null : elapsed.get(nodeId) ?? null);
       const from = stringList(node["reads"]);
       for (const table of stringList(node["writes"])) {
         if (edges.has(table)) continue;
-        edges.set(table, { from, via, file, elapsedMs, runShort: run.id.slice(0, 8) });
+        edges.set(table, { from, via, name: nodeName, file, elapsedMs, runShort: run.id.slice(0, 8) });
       }
     }
   }
@@ -244,7 +247,7 @@ export function buildInputs(input: BuildInputsInput): InputsView {
       const row = makeRow(name, "derive");
       row.from = edge.from;
       row.via = edge.via;
-      row.writer = { fn: edge.via, file: edge.file, elapsedMs: edge.elapsedMs, runShort: edge.runShort };
+      row.writer = { fn: edge.via, name: edge.name, file: edge.file, elapsedMs: edge.elapsedMs, runShort: edge.runShort };
       row.depth = Math.max(...known.map((upstream) => depthOf.get(upstream) ?? 0)) + 1;
       rows.set(name, row);
       fileOf.set(name, owner);

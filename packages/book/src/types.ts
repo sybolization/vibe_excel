@@ -23,6 +23,8 @@ export interface NodeView {
   fn: string;
   file: string;
   title: string;
+  /** 代码里 `# name：中文` 的节点中文名。没有就是空串。 */
+  name: string;
   reads: string[];
   writes: string[];
   elapsedMs: number | null;
@@ -114,6 +116,8 @@ export type SeedKind = "materialize" | "import" | "derive" | "unknown";
 /** 派生表的写出者：哪个运行里的哪个节点。 */
 export interface WriterView {
   fn: string;
+  /** 代码里 `# name：中文` 的节点中文名。没有就是空串。 */
+  name: string;
   file: string;
   elapsedMs: number | null;
   runShort: string;
@@ -195,6 +199,8 @@ export interface DiagramNode {
   /** 表格/文件/sheet 名，计算节点为函数名——前端拿它查详情。 */
   ref: string;
   label: string;
+  /** 中文显示名（代码里 `# name：中文`）。没有就是空串，界面回落到 label。 */
+  name: string;
   /** 第几列，从 0 开始，按依赖深度算。 */
   rank: number;
   /** 属于本次运行：整条路亮起来。 */

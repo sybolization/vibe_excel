@@ -73,6 +73,8 @@ export interface FlowNode {
   timeoutMs?: number;
   /** 节点标题（代码里的 docstring）。只用于展示，**不进摘要**。 */
   title?: string;
+  /** 节点在界面上的中文名（代码里 `# name：中文`，紧挨在 `def` 上一行）。只用于展示，不进摘要。 */
+  name?: string;
   /** 节点内部的步骤说明。只用于展示，不进摘要。 */
   steps?: FlowStep[];
 }

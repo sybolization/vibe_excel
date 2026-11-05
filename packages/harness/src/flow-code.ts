@@ -22,6 +22,8 @@ export interface CodeFlowNode {
   line: number;
   /** docstring 第一行，流程图上的节点标题。 */
   title: string;
+  /** `# name：中文`，节点在界面上的名字。没有就用函数名。 */
+  name?: string;
   reads: string[];
   writes: string[];
   steps: FlowStep[];
@@ -98,6 +100,7 @@ function asCodeFlowNode(raw: unknown, index: number): CodeFlowNode {
     func: text(node['func'], `${where}.func`),
     line: Number(node['line'] ?? 0),
     title: text(node['title'], `${where}.title`),
+    ...(typeof node['name'] === 'string' && node['name'].trim() !== '' ? { name: node['name'].trim() } : {}),
     reads: tables(node['reads'], `${where}.reads`),
     writes: tables(node['writes'], `${where}.writes`),
     steps: steps.filter((step) => step.label !== ''),
@@ -193,6 +196,7 @@ export function nodesOfCodeFlow(flow: CodeFlow): FlowNode[] {
     reads: [...node.reads],
     writes: [...node.writes],
     title: node.title,
+    ...(node.name === undefined ? {} : { name: node.name }),
     ...(node.steps.length > 0 ? { steps: node.steps } : {}),
   }));
 }
