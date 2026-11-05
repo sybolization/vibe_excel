@@ -1,0 +1,119 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>凭证册 · 界面示意</title>
+<style>
+:root{
+  --paper:#f7f3ea; --paper2:#efe9dc; --desk:#e6e1d6;
+  --ink:#211d18; --ink2:#4a423a; --muted:#7c7365;
+  --rule:rgba(33,29,24,.15); --rule2:rgba(33,29,24,.08);
+  --seal:#9c2a23; --none:rgba(33,29,24,.3);
+  --mono:ui-monospace,SFMono-Regular,Consolas,"Courier New",monospace;
+  --serif:"Noto Serif SC","Songti SC","Source Han Serif SC",SimSun,Georgia,serif;
+  --sans:"Noto Sans SC","PingFang SC","Microsoft YaHei",system-ui,sans-serif;
+}
+html[data-theme="dark"]{
+  --paper:#1a1714; --paper2:#242019; --desk:#12100e;
+  --ink:#eae3d7; --ink2:#c6bcae; --muted:#8f8578;
+  --rule:rgba(234,227,215,.18); --rule2:rgba(234,227,215,.10);
+  --seal:#d2594c; --none:rgba(234,227,215,.34);
+}
+*{box-sizing:border-box}
+html,body{margin:0}
+body{background:var(--desk);color:var(--ink);font-family:var(--sans);font-size:13px;line-height:1.6;padding:40px 24px 64px}
+.wrap{max-width:1040px;margin:0 auto}
+.app{background:var(--paper);border:1px solid var(--rule);border-radius:14px;padding:28px 32px 20px;box-shadow:0 1px 2px rgba(20,16,10,.06),0 16px 40px -20px rgba(20,16,10,.28)}
+
+.hd{display:flex;justify-content:space-between;align-items:flex-end;gap:32px;padding-bottom:14px;border-bottom:2px solid var(--ink)}
+.hd h1{margin:0;font-family:var(--serif);font-size:17px;line-height:26px;font-weight:600;letter-spacing:.01em}
+.hd .sub{font-family:var(--mono);font-size:12px;line-height:18px;color:var(--muted);margin-top:2px}
+.hd .stamp{font-family:var(--mono);font-size:12px;line-height:18px;color:var(--muted);text-align:right;white-space:nowrap}
+
+.v{display:grid;grid-template-areas:"g m f s";grid-template-columns:72px minmax(0,1fr) 156px 52px;column-gap:24px;padding:18px 0;border-top:1px solid var(--rule2)}
+.v.first{border-top:0;padding-top:22px}
+.g{grid-area:g;border-right:1px solid var(--rule);padding-right:14px}
+.folio{font-family:var(--mono);font-size:11px;line-height:16px;color:var(--muted);white-space:nowrap}
+.state{font-size:11px;line-height:16px;color:var(--muted);margin-top:6px}
+.state.bound{color:var(--ink2)}
+.m{grid-area:m;min-width:0}
+.flow{font-family:var(--mono);font-size:12px;line-height:18px;color:var(--muted)}
+.intent{font-family:var(--serif);font-size:16px;line-height:26px;font-weight:500;color:var(--ink);margin-top:2px}
+.note{margin-top:12px;padding-left:12px;border-left:2px solid var(--seal);color:var(--seal);font-size:13px;line-height:21px;max-width:52ch}
+.note b{font-weight:600}
+.acts{display:flex;gap:18px;margin-top:12px}
+.act{background:none;border:0;padding:0;font-family:var(--sans);font-size:12px;line-height:18px;color:var(--ink2);text-decoration:underline;text-underline-offset:3px;text-decoration-color:var(--rule);cursor:pointer}
+.act.quiet{color:var(--muted)}
+.f{grid-area:f;font-family:var(--mono);font-size:12px;line-height:18px;color:var(--muted);text-align:right}
+.f .n{display:block;font-size:13px;line-height:20px;color:var(--ink2)}
+.s{grid-area:s;display:flex;justify-content:flex-end;padding-top:2px}
+.seal{width:48px;height:48px;border:2px solid var(--seal);border-radius:4px;color:var(--seal);display:flex;align-items:center;justify-content:center;font-size:11px;line-height:15px;text-align:center;transform:rotate(-2deg);opacity:.9}
+.none{width:48px;height:48px;border:1px dashed var(--none);border-radius:4px;color:var(--muted);display:flex;align-items:center;justify-content:center;font-size:11px;line-height:15px;text-align:center}
+
+.more{padding:14px 0 16px;border-top:1px solid var(--rule2)}
+.more button{background:none;border:0;padding:0;font-family:var(--sans);font-size:12px;line-height:18px;color:var(--muted);cursor:pointer}
+.more .tail{font-family:var(--mono);font-size:11px;color:var(--muted);opacity:.72;margin-left:10px}
+
+.gate{display:flex;align-items:center;gap:20px;padding-top:18px;border-top:2px solid var(--ink)}
+.why{flex:1;font-size:12px;line-height:18px;color:var(--muted)}
+.btn{border:1px solid var(--rule);border-radius:8px;background:transparent;color:var(--muted);font-family:var(--sans);font-size:13px;line-height:18px;padding:8px 18px;cursor:not-allowed}
+.key{display:flex;align-items:center;gap:8px;font-size:12px;line-height:18px;color:var(--muted);white-space:nowrap}
+.kc{font-family:var(--mono);font-size:11px;line-height:16px;border:1px solid var(--rule);border-radius:4px;padding:2px 6px;background:var(--paper2)}
+
+@media (max-width:900px){
+  .v{grid-template-areas:"g m s" "g f f";grid-template-columns:64px minmax(0,1fr) 52px;column-gap:16px}
+  .f{text-align:left;margin-top:10px}
+  .gate{flex-wrap:wrap}
+  body{padding:20px 12px 40px}
+  .app{padding:20px 18px 16px}
+}
+</style>
+</head>
+<body>
+<div class="wrap">
+<div class="app">
+  <div class="hd">
+    <div>
+      <h1>molex-prep</h1>
+      <div class="sub">real-data-2026-10-23 · draft/23e16fce</div>
+    </div>
+    <div class="stamp">当前数据 f8012f7e · 16:14</div>
+  </div>
+
+  <div class="v first">
+    <div class="g"><div class="folio">第 6 张</div><div class="state">草稿</div></div>
+    <div class="m">
+      <div class="flow">site_board 流程 · 第 2 轮收尾</div>
+      <div class="intent">可用岗位按站点汇总成一张板</div>
+      <div class="note">产出 <b>1 行</b>，源表 6337 行 —— 更像丢了 6336 条，不像汇总</div>
+      <div class="acts"><button class="act">重跑这张</button><button class="act quiet">看代码 diff</button></div>
+    </div>
+    <div class="f"><span class="n">1 行</span>site_board<br>ba0583fa · 10.0s</div>
+    <div class="s"><div class="none">缺章</div></div>
+  </div>
+
+  <div class="v">
+    <div class="g"><div class="folio">第 5 张</div><div class="state bound">已装订</div></div>
+    <div class="m">
+      <div class="flow">hr 流程 · 第 1 轮</div>
+      <div class="intent">人员底册与可用岗位对上</div>
+    </div>
+    <div class="f"><span class="n">208 · 290 行</span>pn_board · population<br>b8aa7045 · 43s</div>
+    <div class="s"><div class="seal">已核对</div></div>
+  </div>
+
+  <div class="more"><button>更早 4 张</button><span class="tail">已装订</span></div>
+
+  <div class="gate">
+    <div class="why">第 6 张缺章，装订暂不可用</div>
+    <button class="btn" disabled>装订 1 张</button>
+    <div class="key"><span class="kc">⌘K</span>说一句</div>
+  </div>
+</div>
+</div>
+<script>
+  if (location.hash === "#dark") document.documentElement.dataset.theme = "dark";
+</script>
+</body>
+</html>
