@@ -3,6 +3,9 @@ node_modules/
 dist/
 *.tsbuildinfo
 
+# 生成的账页（随时可由 pnpm book 重算）
+/out/
+
 # Python 虚拟环境（由 uv 生成，不提交）
 .venv/
 __pycache__/
