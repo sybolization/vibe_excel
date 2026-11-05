@@ -1,0 +1,13 @@
+{
+  "flow": "demo-sales",
+  "db": "hr.db",
+  "entry": "pipeline.py",
+  "materialize": [
+    {
+      "file": "orders.xlsx",
+      "sheet": "Orders",
+      "table": "raw_orders"
+    }
+  ],
+  "outputs": ["totals"]
+}

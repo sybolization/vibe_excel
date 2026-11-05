@@ -1,0 +1,175 @@
+{
+  "version": "0.1",
+  "case": {
+    "id": "molex-2026-10-23",
+    "title": "Molex HR 月报（2026-10-23 数据）",
+    "asOf": "2026-10-23",
+    "provenance": "import_hr.py + analyze.py（人工提取自程序仓库的已提交代码）"
+  },
+  "inputs": [
+    { "id": "employees", "label": "employees", "source": { "file": "所有员工_202610231434.XLS", "sheet": "SHEET1" }, "origin": "所有员工_202610231434.XLS / SHEET1 · 60248 行 × 85 列" },
+    { "id": "positions", "label": "positions", "source": { "file": "Position+-+Export+To+CSV_2026_10_20.xlsx", "sheet": "Sheet0" }, "origin": "Position+-+Export+To+CSV_2026_10_20.xlsx / Sheet0 · 24365 行" },
+    { "id": "available_positions", "label": "available_positions", "source": { "file": "可用岗位表_2026-10-22.xlsx", "sheet": "可用岗位" }, "origin": "可用岗位表_2026-10-22.xlsx / 可用岗位 · 6337 行" },
+    { "id": "sent_positions", "label": "sent_positions", "source": { "file": "可用岗位表_2026-10-22.xlsx", "sheet": "本批已发" }, "origin": "可用岗位表_2026-10-22.xlsx / 本批已发 · 159 行" },
+    { "id": "new_hire", "label": "new_hire", "source": { "file": "New Hire_202610231439.XLS", "sheet": "SHEET1" }, "origin": "New Hire_202610231439.XLS / SHEET1 · 25619 行" },
+    { "id": "re_hire", "label": "re_hire", "source": { "file": "Re Hire_202610231438.XLS", "sheet": "SHEET1" }, "origin": "Re Hire_202610231438.XLS / SHEET1 · 1048 行" },
+    { "id": "quarantine", "label": "quarantine", "origin": "解析失败行的隔离区 · 0 行" }
+  ],
+  "outputs": [
+    {
+      "id": "population",
+      "label": "population.csv",
+      "artifact": "population.csv",
+      "origin": "analyze.py build_population：strict 与 conservative 两种口径各出一批人"
+    },
+    {
+      "id": "pn_available",
+      "label": "pn_available.csv",
+      "artifact": "pn_available.csv",
+      "origin": "analyze.py build_pn：按 (主管, 成本中心, DL/IDL) 统计岗位余量"
+    }
+  ],
+  "columns": [
+    {
+      "output": "population",
+      "name": "rule",
+      "formula": "'strict' | 'conservative'",
+      "note": "分支常量：这一行是由哪条口径筛出来的。不来自任何列。",
+      "from": []
+    },
+    {
+      "output": "population",
+      "name": "证件编号",
+      "formula": "s(employees.\"证件编号\")",
+      "note": "直通列。s() 只做归一：None → 空串，整数值的 float → 整数串。",
+      "from": [{ "table": "employees", "column": "证件编号" }]
+    },
+    {
+      "output": "population",
+      "name": "姓名",
+      "formula": "s(employees.\"姓名\")",
+      "note": "直通列，未做任何脱敏或改写。",
+      "from": [{ "table": "employees", "column": "姓名" }]
+    },
+    {
+      "output": "population",
+      "name": "报表部门",
+      "formula": "s(employees.\"报表部门\")",
+      "note": "直通列。部门别名是否已归一，属于语义层的待确认项。",
+      "from": [{ "table": "employees", "column": "报表部门" }]
+    },
+    {
+      "output": "population",
+      "name": "用工类型",
+      "formula": "s(employees.\"用工类型\")",
+      "note": "直通列。它同时参与行过滤（外包员工被排除）。",
+      "from": [{ "table": "employees", "column": "用工类型" }]
+    },
+    {
+      "output": "population",
+      "name": "员工级别",
+      "formula": "s(employees.\"员工级别\")",
+      "note": "直通列。空单元格归一成空串，空串不当作 Exempt 排除。",
+      "from": [{ "table": "employees", "column": "员工级别" }]
+    },
+    {
+      "output": "population",
+      "name": "入职日期",
+      "formula": "to_date(employees.\"入职日期\").isoformat()",
+      "note": "数字按 Excel 序列号换算（基准 1899-12-30，忽略时间小数），文本按 YYYY-M-D / YYYY/M/D 解析；解析不出来的人不会进 population。",
+      "from": [{ "table": "employees", "column": "入职日期" }]
+    },
+    {
+      "output": "pn_available",
+      "name": "主管",
+      "formula": "组键之一：s(\"归属主管\")，两边 key 取并集",
+      "note": "available_positions 与 sent_positions 各自的 (主管, 成本中心, DL/IDL) 组合成组；只在一侧出现的组也会保留。",
+      "from": [
+        { "table": "available_positions", "column": "归属主管" },
+        { "table": "sent_positions", "column": "归属主管" }
+      ]
+    },
+    {
+      "output": "pn_available",
+      "name": "成本中心",
+      "formula": "组键之一：s(\"成本中心\")，两边 key 取并集",
+      "note": "同上：组键的第二段。",
+      "from": [
+        { "table": "available_positions", "column": "成本中心" },
+        { "table": "sent_positions", "column": "成本中心" }
+      ]
+    },
+    {
+      "output": "pn_available",
+      "name": "DL/IDL",
+      "formula": "组键之一：s(\"DL/IDL\")，两边 key 取并集",
+      "note": "组键的第三段；值形如 Direct Labor / Indirect Labor。",
+      "from": [
+        { "table": "available_positions", "column": "DL/IDL" },
+        { "table": "sent_positions", "column": "DL/IDL" }
+      ]
+    },
+    {
+      "output": "pn_available",
+      "name": "remaining",
+      "formula": "len(set(s(available_positions.\"岗位号\") for 同组行))",
+      "note": "按组统计去重岗位号个数。空单元格归一成 \"\" 也计作一个；只含空白的字符串按原样保留、各算一个（这是一个已知的数据质量坑）。",
+      "from": [{ "table": "available_positions", "column": "岗位号" }]
+    },
+    {
+      "output": "pn_available",
+      "name": "sent",
+      "formula": "len(set(s(sent_positions.\"岗位号\") for 同组行))",
+      "note": "同一套去重口径，作用在本批已发表上。",
+      "from": [{ "table": "sent_positions", "column": "岗位号" }]
+    },
+    {
+      "output": "pn_available",
+      "name": "under_threshold",
+      "formula": "CASE WHEN remaining < 50 THEN 1 ELSE 0 END",
+      "note": "阈值 50 硬编码在 analyze.py 的 THRESHOLD。它依赖本表的 remaining，是派生列依赖。",
+      "from": [{ "table": "pn_available", "column": "remaining" }]
+    }
+  ],
+  "filters": [
+    {
+      "output": "population",
+      "name": "strict 口径的行过滤",
+      "kind": "rows",
+      "formula": "\"员工状态\" NOT IN ('离职','退休') AND \"用工类型\" NOT IN ('外包员工','外包员工2') AND NOT (\"员工级别\" = 'Exempt') AND to_date(\"入职日期\") = 2026-10-23",
+      "from": [
+        { "table": "employees", "column": "员工状态" },
+        { "table": "employees", "column": "用工类型" },
+        { "table": "employees", "column": "员工级别" },
+        { "table": "employees", "column": "入职日期" }
+      ]
+    },
+    {
+      "output": "population",
+      "name": "conservative 口径的行过滤",
+      "kind": "rows",
+      "formula": "\"员工状态\" IN ('在职','试用') AND \"用工类型\" NOT IN ('外包员工','外包员工2') AND NOT (\"员工级别\" = 'Exempt') AND to_date(\"入职日期\") = 2026-10-23",
+      "note": "保留状态只有两个取值；库里还有 待离职、退休返聘、实习、派遣员工 等，两边口径的差异就在这里。",
+      "from": [
+        { "table": "employees", "column": "员工状态" },
+        { "table": "employees", "column": "用工类型" },
+        { "table": "employees", "column": "员工级别" },
+        { "table": "employees", "column": "入职日期" }
+      ]
+    },
+    {
+      "output": "pn_available",
+      "name": "分组键：两张表的 key 并集",
+      "kind": "group-key",
+      "formula": "GROUP BY (s(归属主管), s(成本中心), s(DL/IDL))，available_positions ∪ sent_positions",
+      "from": [
+        { "table": "available_positions", "column": "归属主管" },
+        { "table": "available_positions", "column": "成本中心" },
+        { "table": "available_positions", "column": "DL/IDL" },
+        { "table": "sent_positions", "column": "归属主管" },
+        { "table": "sent_positions", "column": "成本中心" },
+        { "table": "sent_positions", "column": "DL/IDL" }
+      ]
+    }
+  ]
+}

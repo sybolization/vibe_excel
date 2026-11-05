@@ -1,0 +1,40 @@
+plugins:
+  - id: commands
+    name: vibe_excel.plugins:commands
+  - id: telemetry
+    name: vibe_excel.plugins:telemetry
+    config:
+      echo: true
+  - id: store
+    name: vibe_excel.plugins:store
+    config:
+      storeRoot: '${VIBE_EXCEL_STORE:-.store}'
+  - id: workspace
+    name: vibe_excel.plugins:workspace
+  - id: exec
+    name: vibe_excel.plugins:exec_plugin
+    config:
+      python: '${VIBE_EXCEL_PYTHON:-}'
+      timeoutMs: 900000
+  - id: agent-pi
+    name: vibe_excel.plugins:agent_pi
+    config:
+      cli: '${VIBE_EXCEL_PI:-}'
+      provider: '${VIBE_EXCEL_PROVIDER:-opencode-go}'
+      model: '${VIBE_EXCEL_MODEL:-deepseek-v4.1-flash}'
+      apiKeyEnv: OPENCODE_API_KEY
+      timeoutMs: 1500000
+      askTimeoutMs: 300000
+  - id: sessions
+    name: vibe_excel.plugins:sessions
+    config:
+      program: demo-sales
+      dbFile: hr.db
+      asOf: '${VIBE_EXCEL_AS_OF:-2026-01-01}'
+      flowPath: flow.json
+      outDir: out
+      askEnabled: true
+      inputs:
+        dir: '${VIBE_EXCEL_GROUND_TRUTH:-}'
+        files:
+          - orders.xlsx

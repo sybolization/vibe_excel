@@ -1,0 +1,62 @@
+{
+  "version": "0.1",
+  "case": {
+    "id": "demo-sales",
+    "title": "Department sales",
+    "asOf": "2026-01-01",
+    "provenance": "Explicit mappings from the bundled demo pipeline"
+  },
+  "inputs": [
+    {
+      "id": "raw_orders",
+      "origin": "orders.xlsx / Orders",
+      "source": {"file": "orders.xlsx", "sheet": "Orders"}
+    }
+  ],
+  "outputs": [
+    {
+      "id": "totals",
+      "label": "totals.csv",
+      "artifact": "totals.csv",
+      "columns": ["department", "quantity", "revenue", "as_of"]
+    }
+  ],
+  "columns": [
+    {
+      "output": "totals",
+      "name": "department",
+      "formula": "GROUP BY raw_orders.department",
+      "from": [{"table": "raw_orders", "column": "department"}]
+    },
+    {
+      "output": "totals",
+      "name": "quantity",
+      "formula": "SUM(numeric(raw_orders.quantity))",
+      "from": [{"table": "raw_orders", "column": "quantity"}]
+    },
+    {
+      "output": "totals",
+      "name": "revenue",
+      "formula": "SUM(numeric(quantity) * numeric(unit_price))",
+      "from": [
+        {"table": "raw_orders", "column": "quantity"},
+        {"table": "raw_orders", "column": "unit_price"}
+      ]
+    },
+    {
+      "output": "totals",
+      "name": "as_of",
+      "formula": "Explicit VIBE_EXCEL_AS_OF business date",
+      "from": []
+    }
+  ],
+  "filters": [
+    {
+      "output": "totals",
+      "name": "department grouping",
+      "kind": "group-key",
+      "formula": "GROUP BY department",
+      "from": [{"table": "raw_orders", "column": "department"}]
+    }
+  ]
+}
