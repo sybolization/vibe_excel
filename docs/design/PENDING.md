@@ -35,12 +35,7 @@ E1 的编码是「数据实心白卡 / 计算透空框 + 无投影 + 全等宽�
 
 ![三种编码](encodings.png)
 
-源码 `encodings.html`（自包含，直接开）：
-
-```
-chrome --headless=new --force-device-scale-factor=2 --window-size=700,360 \
-       --screenshot=encodings.png file:///<abs>/docs/design/encodings.html
-```
+源码 `encodings.html` 是自包含的（只内联了这几个记号色，不依赖 `out/`），改完直接用 Chrome headless 从 `file://` 重拍：窗口 700×360，`--force-device-scale-factor=2`，产出 1400×720。
 
 | | 明度 | 体量 | 字体 | 形状 | 判定 |
 | --- | --- | --- | --- | --- | --- |
