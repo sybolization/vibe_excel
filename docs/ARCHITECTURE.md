@@ -1,6 +1,8 @@
 # 当前架构（加了 cordis 之后）
 
-> 生成于 2026-10-30，对应提交 `313168c`。这份文档描述**现在是什么样**，不描述应该是什么样。
+> 生成于 2026-10-30（`313168c`），2026-11-05 更新：补上 `sqlmap` / `encoder` 两个包、8 条命令、
+> 发布证据与草稿头的比对、以及「声明的产出表必须真的出现」这道核对。
+> 这份文档描述**现在是什么样**，不描述应该是什么样。
 > 决策的"为什么"在 [ADR](adr/) 里，本文只讲"是什么、在哪、怎么连起来"。
 
 ## 1. 全景
@@ -8,19 +10,20 @@
 三块东西，边界比类名重要：
 
 ```
-┌─ 代码仓库 C:\project\vibe_excel ────────────────────────────────┐
-│  packages/contracts   packages/session   packages/runtime        │
-│  packages/harness（宿主 + 7 个插件）   vibe.plugins.yml（清单）   │
-│  spikes/*（验证与演示，不是产品代码）   docs/*  runtime-env/*      │
-└──────────────────────────────────────────────────────────────────┘
+┌─ 代码仓库 C:\project\vibe_excel ───────────────────────────────────────┐
+│  packages/contracts   packages/session   packages/runtime              │
+│  packages/harness（宿主 + 7 个插件）   vibe.plugins.yml（清单）        │
+│  packages/sqlmap（SQL 血缘）   packages/encoder（运行编码）            │
+│  spikes/*（验证与演示，不是产品代码）   docs/*  runtime-env/*          │
+└────────────────────────────────────────────────────────────────────────┘
                     │ 只在运行时通过路径约定引用
                     ▼
-┌─ 制品根 C:\project\vibe_excel-store（不进 Git）──────────────────┐
-│  control.db            控制面：程序/会话/运行/数据版本/制品/发布   │
-│  program-repos/<id>    程序的 git 仓库（长期资产）                 │
-│  sessions/<id>/{work,code,agent,sessions,runs}                    │
-│  data-revisions/<sha>.db   业务库的一致性快照（内容寻址）          │
-└──────────────────────────────────────────────────────────────────┘
+┌─ 制品根 C:\project\vibe_excel-store（不进 Git） ───────────────────────┐
+│  control.db            控制面：程序/会话/运行/数据版本/制品/发布       │
+│  program-repos/<id>    程序的 git 仓库（长期资产）                     │
+│  sessions/<id>/{work,code,agent,sessions,runs}                         │
+│  data-revisions/<sha>.db   业务库的一致性快照（内容寻址）              │
+└────────────────────────────────────────────────────────────────────────┘
 ```
 
 代码仓库和制品根**没有任何硬链接**：代码里只出现路径拼装（`store.storeRoot()`），所以换机器、换目录都不改代码。
@@ -39,12 +42,18 @@
 
 - **库层**：`contracts` 只有类型；`session` 是控制面 + git 草稿/发布；`runtime` 是工作区、锁、快照、干净重跑。
   三者可以被 vitest 直接调用，不需要起宿主。
-- **插件层**：一共 7 个源文件管宿主（`host.ts` / `manifest.ts` / `cli.ts` / `kernel.ts` / `main.ts` / `fs-util.ts` / `index.ts`）
-  加 7 个插件文件（`store` / `workspace` / `exec` / `agent-pi` / `telemetry` / `sessions` / `commands`）。
+- **插件层**：`harness/src` 有 13 个非插件源文件——7 个管宿主（`host.ts` / `manifest.ts` / `cli.ts` / `kernel.ts` /
+  `main.ts` / `fs-util.ts` / `index.ts`），6 个是工作流执行（`flow.ts` / `flow-code.ts` / `flow-source.ts` /
+  `flow-run.ts` / `optimize.ts` / `workspace-facts.ts`）；再加 7 个插件文件
+  （`store` / `workspace` / `exec` / `agent-pi` / `telemetry` / `sessions` / `commands`）。
   插件只做适配与编排，不实现存储或执行。
 - **清单**：一行一个插件，谁依赖谁写在 `inject` / `provide` 里。
 
 跨包 import 实测只有四条边：`session→contracts`、`runtime→contracts`、`harness→{contracts,session,runtime}`。没有环。
+
+另有两个**独立工具包**，既不进宿主也不进这三层：`sqlmap`（真实库 → 列级血缘 → 可双击打开的 HTML）和
+`encoder`（把一次运行编码成事件 / 断言 / trace / 语料的案例）。它们不 import 上面任何一个包，
+也没有包 import 它们——所以加它们不需要动宿主，删它们也不会让 `run` 断掉。
 
 ## 3. 服务图
 
@@ -61,7 +70,7 @@
              └───────────────┴─────────────┴──────────┴────────────┘
                                              │
                                        ┌─────▼──────┐
-                                       │  sessions  │  ← 编排 + 注册 7 条命令
+                                       │  sessions  │  ← 编排 + 注册 8 条命令
                                        └─────┬──────┘
                                              │ 按 commit 读 flow.json
                                        ┌─────▼──────┐   ┌──────────┐
@@ -109,7 +118,7 @@ flow.json ──parseFlow──▶ FlowSpec（只有形状：materialize / outpu
 | **数据版本** `data_revision_id` | `data_revisions` + `data-revisions/<sha>.db` | 两轮一致后才自动快照 | 这次读的是哪版业务库 |
 | **输入批次** `input_batch_id` | `sessions/<id>/work/inputs/<batchId>/` | `setup` 内容寻址复制 | 这批原始文件是哪一份 |
 | **制品** | `artifacts` 表 | run 结束按声明产出的哈希 | 输出了什么、多大、什么哈希 |
-| **发布** | `publishes` 表 | `publish` 读 `run.json` 的两轮证据 | 谁在什么时候、凭哪份证据合进 main |
+| **发布** | `publishes` 表 | `publish` 读 `run.json` 的两轮证据，并核对证据里的 commit 就是草稿分支现在的 HEAD | 谁在什么时候、凭哪份证据合进 main |
 
 关键点：`data_revision_id` 记的是**输入**版本，不是产出。产出走 `artifacts`；一次成功的运行会再产生一个新的数据版本给下一次用。
 
@@ -131,7 +140,8 @@ run
            │     └─ 每个节点：node_runner.py file func --db …
            │           ├─ git worktree --detach <commit> → 全新目录
            │           └─ 标的 t: 参数：从库里读成 DataFrame 再调用
-           ├─ 第 b 轮：同样的输入、同样的业务日，重跑一次
+           ├─ 第 a 轮收尾：核对声明的产出表是否真的出现（缺 → 该轮 ok=false）
+           ├─ 第 b 轮：同样的输入、同样的业务日，重跑一次（同样核对产出表）
            ├─ diffRounds(a, b)                     ← 比声明的产出（表 + 文件）
            ├─ 一致 → 提升第 a 轮产物，VACUUM INTO → 新数据版本
            │  不一致 → 运行失败，不提升、不登记
@@ -141,6 +151,11 @@ run
 
 `author` 是另一条路：`sessions.author` → `agent.run`（起 pi 子进程、白名单环境、事件流落盘）→ `commitDraft`。
 **写程序**和**跑程序**是分开的两步：模型写的时候在草稿 worktree 里调试，跑的时候一定在 detached worktree 里、一定对应某个 commit、一定不带模型凭证。
+
+`publish` 除了要求 `identical: true`，还要求证据里的 `codeCommit` **等于草稿分支现在的 HEAD**。
+`mergeInto` 合的是分支 HEAD，不是 run 记下的那个 commit；少了这道比对，「run 通过 → 再 author 一次 → publish」
+就会把从没双跑过的提交一起合进 main，而证据上还写着上一次的 run。对不上就拒绝，并点出两个 8 位 commit
+（`证据已经过期：运行验证的是 …，草稿现在是 …`）。
 
 写程序之前先探测一次工作区（`workspace-facts.ts`）：库在哪、多大、有几张表，python 在哪、哪个版本、venv 是不是 uv 建的、装了哪些包，输入批次里有什么文件。
 探测结果有**两个出口**：填进提示词的 `{{WORKSPACE}}`，以及写成 `<session>/agent/AGENTS.md`——pi 会把它当 context file 自动读，所以模型在整个会话里随时能查，而不只是提示词开头那一段。
@@ -160,15 +175,19 @@ run
     ├── work/
     │   ├── inputs/<batchId>/      内容寻址的输入副本 + manifest.json
     │   ├── hr.db                  业务库（WAL）
-    │   └── out/<stage>/           阶段产出
+    │   └── out/                   本轮产出文件（成功的 run 会先清空再拷本轮产物）
     ├── agent/  sessions/          每会话独立的 pi 配置与会话文件
     │   └── AGENTS.md              每次 author/optimize 前重写的工作区事实（pi 自动读）
     └── runs/<runId>/
-        ├── run.json               这次运行的全部事实（commit/版本/退出码/哈希）
-        ├── clean/                 本次执行的 detached worktree 产物与 manifest
-        ├── stdout.log stderr.log
-        └── events.jsonl timeline.txt author.json *.html    （author 轨迹）
+        ├── run.json               这次运行的全部事实（codeCommit / flow@摘要 / 两轮记录 / identical）
+        ├── a/  b/                 两轮各自的库、materialize 产物、detached worktree 与 out/
+        └── events.jsonl timeline.txt author.json *.html   （只有 author 运行才有）
 ```
+
+`runs/<runId>/` 的目录名是 `randomUUID()`，**里面没有时间**——想取「最后一次运行」不能按名字排序，按 `run.json` 的 mtime 取。
+
+两个独立工具包不写上面列的那些路径，在制品根另有自己的目录：`corpus/`（encoder 的案例 + `index.jsonl`）和
+`sqlmap/`（`lineage.json` 与可双击打开的 `index.html`）。
 
 ## 7. 边界
 
@@ -197,11 +216,14 @@ run
 1. 没有 `confirmations` 服务：模型提的待确认项只落在一份 JSON 里；能实时问答的只有 `ask_user`
    （模型问、人答、答案写回并落进 `questions.jsonl`），没有「点确认」的界面。
 2. 没有 `verifiers` 服务：双跑只证明"同一 commit 两次结果一致"，业务正确性仍靠外部脚本核对。
-3. 没有「全库双跑比对」：现在只比声明的产出（`outputs` 表 + out 文件），因为 `meta.created_at` 这类非确定内容还没被禁掉。
+3. 没有「全库双跑比对」：只比声明的产出（`outputs` 表 + `out/` 文件），因为 `meta.created_at` 这类非确定内容
+   还没被禁掉。但**「声明的表没出现」不算一致**：每轮收尾会核对声明表是否真的存在，缺表或 `outputs` 为空
+   都判该轮失败（`flow-run.ts` 的第三步）。否则两轮同时缺同一张表，`diffRounds` 看到两边都缺，
+   会把它当成「一致」——那是空集合相等，不是结果相等。
 4. 没有「自动优化」：`optimize` 只会**建议**（模型在只读 worktree 里评审），`--apply=<id>` 只实现被批准的那一条；
    机器自己不会改流程。
-5. 没有 Web / client 半边：`apps/web` 空着，插件模型还没往 UI 延伸。
-6. 没有评测：`packages/eval` 空着，零任务、零 baseline。
+5. 没有 Web / client 半边：`apps/web` 不存在（连空目录都没有），插件模型还没往 UI 延伸。
+6. 没有评测：`packages/eval` 不存在，零任务、零 baseline。（`packages/encoder` 只把运行编码成案例，不是评测。）
 7. 没有热重载、没有分发包、没有插件级权限（ADR-0006 §8）。
-6. 没有多会话并发的实测；锁不跨机器。
-7. 没有工作区写入约束（Windows 上没有可用的 OS 级沙箱，ADR-0001 缺口 13）。
+8. 没有多会话并发的实测；锁不跨机器。
+9. 没有工作区写入约束（Windows 上没有可用的 OS 级沙箱，ADR-0001 缺口 13）。

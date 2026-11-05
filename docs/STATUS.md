@@ -12,7 +12,8 @@
 ---
 
 > **本文是 2026-10-30 的状态快照，其中的计数与插件清单已过时**（当时 9 个插件、29 项测试、还有 `stages`）。
-> 当前状态看 [HANDOFF.md](HANDOFF.md)；决策依据看 [ADR-0007](adr/0007-flow-as-unit.md) 与 [ADR-0008](adr/0008-code-as-flow.md)。
+> 当前结构看 [ARCHITECTURE.md](ARCHITECTURE.md)；当前数据看 `node packages/harness/src/main.ts status`；
+> 决策依据看 [ADR-0007](adr/0007-flow-as-unit.md) 与 [ADR-0008](adr/0008-code-as-flow.md)。
 > 下面保留原文，是因为「为什么当时这么想」本身是记录。
 
 ## 一、做了什么

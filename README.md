@@ -22,7 +22,7 @@
 | `packages/contracts` | 跨层最小契约（品牌化 ID、运行状态、执行事件、限制） |
 | `packages/session` | S1：Program/Session/Run/DataRevision 持久化、草稿与发布、恢复视图 |
 | `packages/runtime` | S3：会话工作区、排他锁、SQLite 一致性快照、干净重跑 |
-| `packages/harness` | S2：插件化宿主（cordis）+ 7 个插件（store/workspace/exec/agent-pi/telemetry/sessions/commands）+ 工作流执行（flow / flow-code / flow-run / flow-source / workspace-facts）+ 骨架 python（`py/materialize.py`、`py/node_runner.py`、`py/flow_parse.py`）+ CLI |
+| `packages/harness` | S2：插件化宿主（cordis）+ 7 个插件（store/workspace/exec/agent-pi/telemetry/sessions/commands）+ 工作流执行（flow / flow-code / flow-run / flow-source / optimize / workspace-facts）+ 骨架 python（`py/materialize.py`、`py/node_runner.py`、`py/flow_parse.py`）+ CLI |
 | `packages/sqlmap` | SQL 表的列级血缘与两级可视化（真实库 → 可双击打开的 HTML） |
 | `packages/encoder` | 把一次运行编码成可评估的案例（事件 / 语义断言 / trace / 语料库） |
 | `vibe.plugins.yml` | 插件清单：一行一个插件，启动顺序由服务依赖决定 |
@@ -51,7 +51,8 @@ pnpm install
 
 ```powershell
 pnpm typecheck                      # tsc 类型检查（含 erasableSyntaxOnly）
-pnpm test                           # vitest：12 个文件 / 135 项，含 setup→run→publish 的端到端用例
+pnpm test                           # vitest：15 个文件 / 206 项，含 setup→run→publish 的端到端用例
+pnpm book                           # 只读：把 control.db + run.json + 会话日志渲染成一张可拖可缩的画布：文件 → sheet → 表 → 计算节点，本次运行那条路点亮
 uv run --project runtime-env python runtime-env/smoke.py   # 数据运行时冒烟测试
 
 # M0 验证（需要 OPENCODE_API_KEY 在环境里）
@@ -74,6 +75,8 @@ node packages/harness/src/main.ts optimize           # 模型只读评审「能�
 node packages/harness/src/main.ts optimize --apply=p1   # 只实现你批准的那一条（会提交草稿）
 node packages/harness/src/main.ts publish [--run=<id>]   # 只发布带「两次一致」证据的运行
 node packages/harness/src/main.ts status             # 恢复视图（四个版本引用）
+node packages/harness/src/main.ts author --prompt=<文件>   # 让模型写程序并提交到草稿（需要 OPENCODE_API_KEY）
+node packages/harness/src/main.ts db                 # 业务库语义摘要（每表行数 + 内容哈希）
 ```
 
 工作流的形状见 [ADR-0007](docs/adr/0007-flow-as-unit.md)：`flow.json` 是版本单位，节点是代码里的函数，
