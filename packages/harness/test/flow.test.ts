@@ -177,12 +177,20 @@ describe('parseFlow：合法输入', () => {
 });
 
 describe('parseFlow：形状与字段校验', () => {
-  it('顶层必须是对象；flow 名必填；db 必须以 .db 结尾', () => {
+  it('顶层必须是对象；flow 名必填；db 必须是不带目录的 .db 文件名', () => {
     expect(() => parseFlow(null)).toThrow(/flow 应该是一个对象/);
     expect(() => parseFlow([])).toThrow(/flow 应该是一个对象/);
     expect(() => parseFlow({})).toThrow(/flow\.flow/);
     expect(() => parseFlow(rawFlow({ flow: '   ' }))).toThrow(/不能为空/);
     expect(() => parseFlow(rawFlow({ db: 'hr.sqlite' }))).toThrow(/以 \.db 结尾/);
+    // db 是唯一会被 join 成真实路径再 copyFileSync 覆盖的字段：带目录成分一律拒绝。
+    // 放行 `../` 等于让程序仓库里的一行 JSON 决定宿主覆盖哪个文件（旧版只查 .db 后缀）。
+    expect(() => parseFlow(rawFlow({ db: '../hr.db' }))).toThrow(/不带目录的文件名/);
+    expect(() => parseFlow(rawFlow({ db: 'a/../hr.db' }))).toThrow(/不带目录的文件名/);
+    expect(() => parseFlow(rawFlow({ db: 'sub/hr.db' }))).toThrow(/不带目录的文件名/);
+    expect(() => parseFlow(rawFlow({ db: 'sub\\hr.db' }))).toThrow(/不带目录的文件名/);
+    expect(() => parseFlow(rawFlow({ db: 'C:\\code\\hr.db' }))).toThrow(/不带目录的文件名/);
+    expect(parseFlow(rawFlow({ db: 'hr.db' })).db).toBe('hr.db');
     expect(() => parseFlow(rawFlow({ nodes: 'nope' }))).toThrow(/nodes 应该是数组/);
     expect(() => parseFlow(rawFlow({ nodes: [null] }))).toThrow(/应该是对象/);
     expect(() => parseFlow(rawFlow({ materialize: {} }))).toThrow(/materialize 应该是数组/);

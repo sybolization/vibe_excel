@@ -274,6 +274,33 @@ describe.skipIf(!ready)('端到端：setup → run（双跑）→ publish', () =
     expect(lines.join('\n')).toMatch(/flow integ@/);
   }, 120_000);
 
+  it('证据必须属于当前草稿头：run 之后再提交一次，publish 拒绝；退回被验证的提交才放行', async () => {
+    const { store, cli, code, errors } = await scaffold();
+
+    writeFileSync(join(code, 'pipeline.py'), DETERMINISTIC, 'utf8');
+    writeFileSync(join(code, 'flow.json'), FLOW, 'utf8');
+    git(code, ['add', '-A']);
+    git(code, ['commit', '-m', 'integ: verified']);
+
+    expect(await cli(['run']), errors.join('\n')).toBe(0);
+    const verified = latestRunJson(store);
+    expect(verified.status).toBe('succeeded');
+    expect(verified.identical).toBe(true);
+
+    // 在通过的那次 run 之后再加一个提交：这个提交从没跑过双跑。
+    // 旧实现只比 run.json 的 status/identical，会把这条未验证的提交一起合进 main。
+    writeFileSync(join(code, 'pipeline.py'), `${DETERMINISTIC}\n# 只在通过之后加的一行注释\n`, 'utf8');
+    git(code, ['add', '-A']);
+    git(code, ['commit', '-m', 'integ: unverified']);
+
+    expect(await cli(['publish'])).toBe(1);
+    expect(errors.join('\n')).toMatch(/证据已经过期/);
+
+    // 回到被验证的那个提交：能发布，说明拒绝的依据是「对不上」而不是「一律不放」。
+    git(code, ['reset', '--hard', 'HEAD~1']);
+    expect(await cli(['publish']), errors.join('\n')).toBe(0);
+  }, 120_000);
+
   it('flow.json 不写 nodes：图从 main 解析出来，照样双跑一致并登记数据版本', async () => {
     const { store, errors, cli, code } = await scaffold();
 

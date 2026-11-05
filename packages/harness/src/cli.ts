@@ -2,7 +2,7 @@
  * CLI：组合根。
  *
  * 它只做「读清单 → 起宿主 → 把子命令交给 commands 服务」。
- * 子命令全部由插件注册（`sessions` 注册了 setup/run/verify/publish/status/author/stages/db），
+ * 子命令全部由插件注册（`sessions` 注册了 setup/run/flow/publish/optimize/status/author/db），
  * 所以加一个命令不需要改这个文件。
  */
 

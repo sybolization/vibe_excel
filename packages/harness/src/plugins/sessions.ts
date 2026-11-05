@@ -1,5 +1,6 @@
 /**
- * 插件：sessions —— 会话生命周期编排（author / run / verify / publish / status）。
+ * 插件：sessions —— 会话生命周期编排，注册 8 条命令：
+ *   setup / run / flow / publish / optimize / status / author / db。
  *
  * 它把四件事串起来，但每件事都只通过服务调用，不认识具体实现：
  *   写程序 → agent      执行 → exec      记录 → store      落盘 → workspace
@@ -423,6 +424,10 @@ export default definePlugin<SessionsConfig>({
      *
      * 证据不在单独的文件里，就在那次运行的 run.json 里：`identical: true` 是运行的一部分，
      * 不是另一个阶段。拿不到这条证据就拒绝发布——发布改变的是未来，不能凭感觉。
+     *
+     * 还有**第二件事必须对得上**：证据得属于现在这条草稿。`mergeInto` 合的是分支 HEAD，
+     * 不是 run 记下的那个 commit；少了这道比对，「run 通过 → 再 author 一次 → publish」
+     * 会把从未双跑过的提交一起合进 main，而证据上还写着上一次的 run。
      */
     const publish = (input: { runId?: string }): { commit: string; note: string | null } => {
       const { session, paths } = resolveContext();
@@ -444,9 +449,28 @@ export default definePlugin<SessionsConfig>({
           `这次运行没有「两次一致」的证据（status=${record.status ?? '?'} identical=${String(record.identical)}）：拒绝发布`,
         );
       }
+
+      // 证据必须属于「现在这条草稿」：合入的是分支 HEAD，不是 run 记下的那个 commit。
+      // 少了这一步，一次通过的 run 之后只要再提交一次，未双跑过的提交就会跟着合进 main。
+      const head = db.draftHead(session.id);
+      if (!head) fail('草稿分支没有提交：没有可发布的内容');
+      // 两处都记了 codeCommit：run.json 是那次运行的证据本体，runs 表是索引。任一处缺都算记录不全。
+      const evidenceCommit = record.codeCommit ?? run.codeCommit ?? null;
+      if (!evidenceCommit) {
+        fail('这次运行没有记下代码版本（codeCommit）：无法确认发布的是被验证过的字节，拒绝发布');
+      }
+      if (evidenceCommit !== head) {
+        fail(
+          `证据已经过期：运行验证的是 ${evidenceCommit.slice(0, 8)}，草稿现在是 ${head.slice(0, 8)}。` +
+            `${head.slice(0, 8)} 上从没跑过双跑，拒绝发布（先在这个提交上重新 run）。`,
+        );
+      }
+
       const result = db.publish(session.id, {
-        cleanRunPassed: true,
-        evidence: `flow@${record.flowDigest} run=${run.id} identical=true`,
+        // 不再是常量：走到这里意味着「两次一致」与「证据对得上当前 HEAD」两件事都成立。
+        // 保持计算出来的形式，store 侧那道守卫才不会因为一个恒真的实参变成死代码。
+        cleanRunPassed: record.identical === true && evidenceCommit === head,
+        evidence: `flow@${record.flowDigest} run=${run.id} identical=true code=${evidenceCommit.slice(0, 8)}`,
       });
       return { commit: result.commit, note: result.record.note };
     };

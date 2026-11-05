@@ -173,6 +173,23 @@ const asBatchFile = (value: unknown, where: string): string => {
   return text;
 };
 
+/**
+ * 业务库文件名：只能是一段文件名，不带任何目录成分。
+ *
+ * 为什么必须这么严：这个名字会被 `join(runDir, flow.db)` 拼成真实路径，再拿 `copyFileSync`
+ * 直接覆盖。而 `flow.json` 来自程序仓库（可以是模型写出来的），放行 `../` 就等于让仓库里的
+ * 一行 JSON 决定宿主要覆盖哪个文件。同文件的 `asBatchFile` / `asEntryPath` / `parseCall`
+ * 都有这条拒绝，`db` 不能例外。
+ */
+const asDbFileName = (value: unknown, where: string): string => {
+  const text = asString(value, where);
+  if (/^([A-Za-z]:|[/\\])/.test(text) || text.includes('/') || text.includes('\\')) {
+    fail(`${where} 必须是不带目录的文件名（它会拼进本次运行的目录）：${text}`);
+  }
+  if (!text.endsWith('.db')) fail(`${where} 应该以 .db 结尾：${text}`);
+  return text;
+};
+
 /** 代码即流程的默认入口：`flow.json` 不写 `entry` 时就找它。 */
 export const DEFAULT_ENTRY = 'pipeline.py';
 
@@ -254,8 +271,7 @@ export function parseFlow(raw: unknown): FlowSpec {
   const input = raw as Record<string, unknown>;
 
   const flow = asString(input['flow'], 'flow.flow');
-  const db = input['db'] === undefined ? 'hr.db' : asString(input['db'], 'flow.db');
-  if (!db.endsWith('.db')) fail(`flow.db 应该以 .db 结尾：${db}`);
+  const db = input['db'] === undefined ? 'hr.db' : asDbFileName(input['db'], 'flow.db');
   const materialize = parseMaterialize(input['materialize']);
   const outputs = asTableList(input['outputs'], 'flow.outputs');
 

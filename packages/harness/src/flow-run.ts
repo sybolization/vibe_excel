@@ -258,11 +258,28 @@ export function runFlowRound(options: FlowRoundOptions): FlowRoundResult {
     }
   }
 
+  /* ---- 第三步：声明的产出必须真的出现 ---- */
+  // databaseDigest 只返回库里真实存在的表。一张「声明了但没建出来」的表会在两轮里同时消失，
+  // diffRounds 看到两边都缺就判 identical——那是「空集合一致」，不是「结果一致」。
+  // 空 outputs 更彻底：可比较的集合本身为空，双跑退化成「两轮都没崩」。
+  const outputs = databaseDigest(options.dbPath, [...options.plan.spec.outputs]);
+  if (ok) {
+    const declared = options.plan.spec.outputs;
+    const missing = declared.filter((table) => outputs[table] === undefined);
+    if (declared.length === 0) {
+      log('    ! 这条流没有声明产出表（flow.outputs）：双跑没有可比的东西，判这一轮失败');
+      ok = false;
+    } else if (missing.length > 0) {
+      log(`    ! 声明的产出表没有出现：${missing.join(', ')}（节点没写出来，或写到了别的名字）`);
+      ok = false;
+    }
+  }
+
   return {
     ok,
     materialize: { ...materializeResult, entries },
     nodes,
-    outputs: databaseDigest(options.dbPath, [...options.plan.spec.outputs]),
+    outputs,
     files: dirDigests(options.outDir),
   };
 }

@@ -132,6 +132,9 @@ describe('一轮执行', () => {
   it('声明了写表却没变，记为空转但不判失败（这是给模型看的事实）', () => {
     const dir = tempDir();
     const dbPath = makeDb(dir);
+    // 先造出 result 并写定内容：节点接下来写的是同一份内容，才叫「真的没变」。
+    // 表根本不存在不是空转、是没产出——那是下一条用例。
+    executeSqlNode(dbPath, 'CREATE TABLE result (x INTEGER); INSERT INTO result VALUES (1);');
     const plan = planFlow(base([{ id: 'noop', call: 'sql/noop.sql', reads: [], writes: ['result'] }]));
 
     const round = runFlowRound({
@@ -144,11 +147,39 @@ describe('一轮执行', () => {
       runPython: () => {
         throw new Error('这个用例不应该跑 python');
       },
-      readFile: () => 'CREATE TABLE IF NOT EXISTS unrelated (x INTEGER);',
+      readFile: () => 'DELETE FROM result; INSERT INTO result VALUES (1);',
     });
 
     expect(round.ok).toBe(true);
     expect(round.nodes[0]!.unchanged).toEqual(['result']);
+    expect(round.outputs['result']?.rows).toBe(1);
+  });
+
+  it('声明的产出表两轮都没出现时判这一轮失败（不给「空集合一致」留缝）', () => {
+    const dir = tempDir();
+    const dbPath = makeDb(dir);
+    const plan = planFlow(base([{ id: 'noop', call: 'sql/noop.sql', reads: [], writes: ['result'] }]));
+    const logs: string[] = [];
+
+    const round = runFlowRound({
+      plan,
+      dbPath,
+      inputsDir: dir,
+      outDir: join(dir, 'out'),
+      asOf: '2026-01-01',
+      runMaterialize: () => ({ exitCode: 0, timedOut: false, stdout: '', stderr: '', elapsedMs: 0 }),
+      runPython: () => {
+        throw new Error('这个用例不应该跑 python');
+      },
+      // 节点跑成功了，但它只建了一张跟声明无关的表：result 从没出现过。
+      readFile: () => 'CREATE TABLE IF NOT EXISTS unrelated (x INTEGER);',
+      log: (line) => logs.push(line),
+    });
+
+    // 两轮的 outputs 里都没有 result —— 旧实现会因此判 identical，这就是那条缝。
+    expect(round.ok).toBe(false);
+    expect(round.outputs['result']).toBeUndefined();
+    expect(logs.join('\n')).toMatch(/声明的产出表没有出现：result/);
   });
 
   it('物化声明的表没有产出时要报出来', () => {

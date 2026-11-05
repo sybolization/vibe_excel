@@ -92,7 +92,12 @@ Web 界面、沙箱化执行器——都会继续往这个文件里塞。
 因为只用了决策 5 的子集，换掉 cordis 需要改的只有 `host.ts` 和 `kernel.ts` 里 `PluginContext` 的定义（约 200 行），
 所有插件的写法不变。这是"用外部框架"和"被外部框架锁死"的区别。
 
-## 5. 现在的插件图（9 个，全部 ACTIVE）
+## 5. 当时的插件图（9 个，全部 ACTIVE）
+
+> **2026-11-05 补记**：`stages` / `stage-molex` 已按 [ADR-0007](0007-flow-as-unit.md) 删除，现在是 7 个插件；
+> `sessions` 注册的命令也不一样了——现在是 `setup/run/flow/publish/optimize/status/author/db`
+> （`verify` 与 `stages` 已不存在）。下面 §5–§7 的图、命令名、`StageSpec` 与测试计数都保留原样作为记录，
+> **当前的**看 [ARCHITECTURE.md](../ARCHITECTURE.md)。
 
 ```
 commands ──────────────┐
