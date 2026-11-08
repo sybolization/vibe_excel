@@ -1,4 +1,8 @@
-"""Render the original book frontend as one fully offline HTML document."""
+"""把原始 book 前端渲染成一个完全离线的 HTML 文档。
+
+本模块只拼接内置的 app.css/app.js 与序列化后的视图模型，不访问网络或 store。
+视图模型会嵌入 <script> 标签，因此序列化结果必须先转义再拼接。
+"""
 
 from html import escape
 from pathlib import Path
@@ -10,14 +14,21 @@ _ASSETS = Path(__file__).resolve().parents[1] / "assets" / "book"
 
 
 def _asset(name: str) -> str:
+    """读取随包分发的静态资源；缺失时提示打包不完整。"""
     try:
         return (_ASSETS / name).read_text(encoding="utf-8")
     except (OSError, UnicodeError) as error:
-        raise VibeError(f"Missing bundled book asset {name}: {error}") from error
+        raise VibeError(f"缺少内置的 book 资源 {name}：{error}") from error
 
 
 def render_book(view: BookView) -> str:
+    """把 book 视图模型渲染成单文件 HTML。
+
+    诊断信息合并自 view、graph 与 inputs 三处并去重，以 details 折叠块呈现，
+    保证可选页面缺失时仍能浏览其余内容。
+    """
     css, js = _asset("app.css"), _asset("app.js")
+    # 内联 JSON 中的 < 与行分隔符必须转义，否则 </script> 会提前闭合脚本标签。
     payload = escape_for_script(json_text(view))
     program = view["program"]["name"] if view["program"] is not None else "book"
     warnings = list(view.get("warnings", []))
@@ -25,6 +36,7 @@ def render_book(view: BookView) -> str:
         warnings.extend(view["graph"]["warnings"])
     if view["inputs"] is not None:
         warnings.extend(view["inputs"].get("warnings", []))
+    # 三处诊断可能重复，按首次出现顺序去重后再渲染。
     warnings = list(dict.fromkeys(warnings))
     diagnostics = ""
     if warnings:

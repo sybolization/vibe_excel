@@ -1,3 +1,9 @@
+"""encoder 的命令行：record / claims / list / digest 四个子命令。
+
+输入是运行目录与 claims.jsonl，输出写入语料库（corpus）目录并打印摘要。
+案例一旦落盘就不可变更：同 id 且同内容只返回 unchanged，不同内容直接报错。
+"""
+
 from __future__ import annotations
 
 import json
@@ -48,11 +54,20 @@ USAGE = f"""用法：
 
 @dataclass(slots=True)
 class _Parsed:
+    """一次命令行解析的结果。
+
+    flags 按名称保留全部出现值，positionals 保留下标顺序。
+    """
+
     positionals: list[str] = field(default_factory=list)
     flags: dict[str, list[str]] = field(default_factory=dict)
 
 
 def _parse_args(argv: list[str]) -> _Parsed:
+    """把 argv 拆成位置参数与标志。
+
+    标志可重复出现，后续由 _flag/_required 决定取哪一个；无值的标志记为空串。
+    """
     args = _Parsed()
     index = 0
     while index < len(argv):
@@ -69,11 +84,13 @@ def _parse_args(argv: list[str]) -> _Parsed:
 
 
 def _flag(args: _Parsed, name: str) -> str | None:
+    """取标志的最后一个值；普通标志重复出现时以后者为准。"""
     values = args.flags.get(name)
     return values[-1] if values else None
 
 
 def _required(args: _Parsed, name: str) -> str:
+    """取必填标志；缺失或为空时附带用法说明报错。"""
     value = _flag(args, name)
     if value is None or value == "":
         raise VibeError(f"缺少参数 --{name}\n\n{USAGE}")
@@ -81,6 +98,7 @@ def _required(args: _Parsed, name: str) -> str:
 
 
 def _print_claims(file: str) -> None:
+    """折叠并打印 claims 文件当前状态。"""
     path = Path(file)
     states = fold_claims(parse_claims(read_utf8(path) if path.exists() else ""))
     if not states:
@@ -99,6 +117,11 @@ _RADIX = re.compile(r"0(?:[xX][0-9a-fA-F]+|[bB][01]+|[oO][0-7]+)\Z")
 
 
 def _score(text: str) -> float:
+    """解析 0..1 的分数。
+
+    除常规十进制外也接受 0x/0b/0o 字面量，兼容 JS Number 的解析习惯；
+    空串按 0 处理。
+    """
     stripped = trim_text(text)
     if not stripped:
         return 0
@@ -117,6 +140,11 @@ def _score(text: str) -> float:
 
 
 def _record(args: _Parsed) -> None:
+    """构建并保存一个新案例。
+
+    outcome 缺省为 partial；claims 文件存在时先折叠成状态再写入案例，
+    最后打印摘要并提示未确认语义仍需人工判定。
+    """
     run_dir = _required(args, "run")
     case_id = _required(args, "id")
     family = _required(args, "family")
@@ -175,6 +203,7 @@ def _record(args: _Parsed) -> None:
 
 
 def _dispatch(args: _Parsed) -> None:
+    """按第一个位置参数分发到 record/list/digest/claims 子命令。"""
     command = args.positionals[0] if args.positionals else None
     sub = args.positionals[1] if len(args.positionals) > 1 else None
     if command == "record":
@@ -238,6 +267,7 @@ def _dispatch(args: _Parsed) -> None:
 
 
 def run_cli(argv: list[str]) -> int:
+    """执行编码 CLI；已知错误统一转成返回码 1。"""
     try:
         _dispatch(_parse_args(argv))
     except (VibeError, OSError, json.JSONDecodeError, UnicodeError) as error:
@@ -247,6 +277,7 @@ def run_cli(argv: list[str]) -> int:
 
 
 def main() -> None:
+    """供 `python -m vibe_excel.encoder` 调用的入口；失败时设置退出码。"""
     status = run_cli(sys.argv[1:])
     if status:
         raise SystemExit(status)

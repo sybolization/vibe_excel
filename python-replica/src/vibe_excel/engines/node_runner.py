@@ -33,6 +33,7 @@ RUNTIME = ("db", "inputs", "out", "as_of")
 
 
 def load_module(path: str):
+    """按文件路径加载模块；先注册到 sys.modules 再执行，兼容自引用类型。"""
     spec = importlib.util.spec_from_file_location("_vibe_node_target", path)
     if spec is None or spec.loader is None:
         raise SystemExit(f"无法加载模块：{path}")
@@ -51,6 +52,7 @@ def load_module(path: str):
 
 
 def parse_pairs(argv: list[str]) -> dict[str, str]:
+    """把 --key value 序列解析成 dict，键里的连字符转下划线。"""
     values: dict[str, str] = {}
     index = 0
     while index < len(argv):
@@ -105,6 +107,7 @@ def read_tables(db_path: str, tables: list[str], func_name: str) -> dict[str, ob
 
 
 def call_with_signature(func, values: dict[str, str]):
+    """只传函数签名真正接受的参数；t: 标注的参数从库里读成 DataFrame。"""
     signature = inspect.signature(func)
     parameters = list(signature.parameters.items())
 
@@ -118,6 +121,7 @@ def call_with_signature(func, values: dict[str, str]):
         if table is not None:
             wanted[name] = table
 
+    # 同一张表被多个参数引用时只读一次。
     tables = sorted(set(wanted.values()))
     if tables and "db" not in values:
         raise SystemExit(
@@ -144,12 +148,14 @@ def call_with_signature(func, values: dict[str, str]):
                 f"（标 `\"t:表名\"` 的参数由平台从库里读，不用自己查）"
             )
     if accepts_extra:
+        # 有 **kwargs 时把平台全部入参也传进去，节点可按需取用。
         for name, value in values.items():
             kwargs.setdefault(name, value)
     return func(**kwargs)
 
 
 def main(argv: list[str]) -> int:
+    """命令行入口：加载模块、取函数、按签名调用，dict 返回值打到 stdout。"""
     if len(argv) < 2:
         raise SystemExit("用法：node_runner.py <文件> <函数名> [--key value ...]")
     path, name = argv[0], argv[1]
@@ -163,6 +169,7 @@ def main(argv: list[str]) -> int:
         raise SystemExit(f"{path}:{name} 不是函数（节点必须指向一个函数）")
 
     result = call_with_signature(func, values)
+    # 只有 dict 返回值才序列化；写表由节点自己负责。
     if isinstance(result, dict):
         json.dump(result, sys.stdout, ensure_ascii=False, default=str)
         sys.stdout.write("\n")

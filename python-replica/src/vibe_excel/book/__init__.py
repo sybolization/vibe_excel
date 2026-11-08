@@ -1,4 +1,9 @@
-"""Read-only collection and standalone visualization of a vibe-excel store."""
+"""只读收集并独立可视化 vibe-excel store。
+
+数据来源是 store 目录里的 control.db、run 记录与 JSONL 对话；本包只读取，
+绝不修改数据库或写回 store。对外以 snake_case 为主，同时保留原前端使用的
+camelCase 别名，便于与前端代码逐字对照。
+"""
 
 from .collect import collect_book, collectBook, read_db_facts, read_table_stat, sample_table
 from .diagram import MAX_RANK, build_diagram, buildDiagram
@@ -47,6 +52,10 @@ from .types import (
 
 
 def run_cli(argv: list[str]) -> int:
+    """把命令行参数转交给 CLI 模块。
+
+    延迟导入让仅使用数据模型或渲染函数的调用方不必加载 CLI 依赖。
+    """
     from .cli import run_cli as run
 
     return run(argv)

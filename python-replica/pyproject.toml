@@ -1,7 +1,7 @@
 [project]
 name = "vibe-excel-python"
 version = "0.1.0"
-description = "Self-contained Python replica of Vibe Excel"
+description = "Vibe Excel 的自包含 Python 复刻版"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [

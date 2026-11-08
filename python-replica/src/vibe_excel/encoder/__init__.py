@@ -1,4 +1,9 @@
-"""Encode existing run facts and reviewed semantics into immutable cases."""
+"""把现有运行事实与经复核的语义编码为不可变案例。
+
+数据来源是运行目录（events.jsonl、author.json、verify.json、run.json）、
+claims.jsonl 与调用方提交的结果判定。案例写入语料库（corpus）后不可覆盖：
+同 id 不同内容会被拒绝，索引只追加到 index.jsonl。
+"""
 
 from .claims import (
     CLAIM_KINDS,

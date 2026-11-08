@@ -1,4 +1,8 @@
-"""Build author-declared lineage.json and a standalone index.html."""
+"""sqlmap 的命令行：校验声明并写出 lineage.json 与 index.html。
+
+输入是 SQLite 库、血缘声明 JSON 与可选 CSV 目录；输出目录不得与源文件重叠。
+不会执行或解析任何公式，公式只作为文本参与列引用校验。
+"""
 
 import json
 import sqlite3
@@ -14,6 +18,10 @@ USAGE = "build --db <sqlite 路径> --lineage <声明.json> --out <输出目录>
 
 
 def _arguments(argv: list[str]) -> dict[str, str]:
+    """解析 build 子命令的参数。
+
+    只接受 --db/--lineage/--out/--csv，前三个必填；未知或缺值直接报错。
+    """
     if not argv or argv[0] != "build":
         raise VibeError(f"用法：{USAGE}")
     flags: dict[str, str] = {}
@@ -33,6 +41,7 @@ def _arguments(argv: list[str]) -> dict[str, str]:
 
 
 def _summarize(built: BuiltLineage) -> None:
+    """打印输入/输出表、列映射与行约束的摘要。"""
     print(f"案例  {built['case']['title']}（{built['case']['id']}）")
     for kind, label in (("input", "输入"), ("output", "输出")):
         tables = [table for table in built["tables"] if table["kind"] == kind]
@@ -45,6 +54,10 @@ def _summarize(built: BuiltLineage) -> None:
 
 
 def run_cli(argv: list[str]) -> int:
+    """执行一次导出：校验声明、渲染 HTML、写出两个产物。
+
+    已知错误统一转成返回码 1；输出路径与源文件重叠时直接拒绝，避免覆盖声明。
+    """
     if argv in (["--help"], ["-h"], ["build", "--help"], ["build", "-h"]):
         print(f"用法：{USAGE}\n产出：lineage.json 与自包含 index.html；不解析或执行公式")
         return 0
@@ -60,6 +73,7 @@ def run_cli(argv: list[str]) -> int:
                 for table in built["tables"] if "artifact" in table
             )
         destinations = {out_dir / "lineage.json", out_dir / "index.html"}
+        # 输出固定为这两个文件；与源库、声明或 CSV 同名则拒绝，避免自毁输入。
         if sources.intersection(destinations):
             raise VibeError("导出路径会覆盖源数据库、血缘声明或 CSV；请选择另一个输出目录")
         html = render_html(built)
@@ -75,6 +89,7 @@ def run_cli(argv: list[str]) -> int:
 
 
 def main() -> int:
+    """供 `python -m vibe_excel.sqlmap` 与控制台脚本调用的入口。"""
     return run_cli(sys.argv[1:])
 
 

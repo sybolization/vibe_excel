@@ -96,6 +96,7 @@ class LoadPlan:
 
 
 def parse_args(argv: list[str]) -> argparse.Namespace:
+    """解析命令行参数；--repo 只给 load 例外通道使用。"""
     parser = argparse.ArgumentParser(
         prog="materialize.py",
         description="按纯映射把 Excel 落成 SQLite 表（不做任何业务规则）",
@@ -168,6 +169,7 @@ def list_entries(directory: Path) -> str:
 
 
 def split_relative(file_spec: str) -> list[str]:
+    """把 file 拆成路径段，并拒绝绝对路径、.. 与空路径。"""
     if os.path.isabs(file_spec):
         raise MaterializeError(f"file 应该相对 --inputs，不能是绝对路径：{file_spec!r}")
     parts = [part for part in PATH_SPLIT.split(file_spec) if part not in ("", ".")]
@@ -228,6 +230,7 @@ def pick_sheet(sheets: list[str], sheet_spec: str | None, file_spec: str) -> str
 
 
 def plan_table(entry: dict) -> str:
+    """校验并返回目标表名；表名必须能直接拼进 SQL 标识符。"""
     table = entry.get("table")
     if not isinstance(table, str) or not table:
         raise MaterializeError("清单里没写 table：每个条目都要说明落成哪张表")
@@ -339,6 +342,7 @@ def split_load(load: str) -> tuple[str, str]:
 
 
 def loader_path(repo: Path, file_part: str) -> Path:
+    """把清单里的相对文件路径解析到 --repo 根之下。"""
     parts = [part for part in PATH_SPLIT.split(file_part) if part not in ("", ".")]
     return repo.joinpath(*parts)
 
@@ -408,6 +412,7 @@ def write_table(frame: pd.DataFrame, conn: sqlite3.Connection, table: str) -> No
     if len(frame.columns) == 0:
         raise MaterializeError("没有任何列，SQLite 建不出表")
     try:
+        # if_exists="replace"：同一清单重复执行应得到同样的表，而不是追加。
         frame.to_sql(table, conn, if_exists="replace", index=False)
     except Exception as exc:
         raise MaterializeError(f"写表失败（{type(exc).__name__}: {exc}）") from None
@@ -467,6 +472,7 @@ def call_loader(plan: LoadPlan, repo: Path, inputs_dir: Path, db_path: Path) -> 
 
 
 def progress_line(plan: MappingPlan, frame: pd.DataFrame) -> str:
+    """渲染一条物化进度行（在写表成功之后才打印）。"""
     return (
         f"[{plan.index}/{plan.total}] {plan.label} → {plan.table}"
         f"  {len(frame)} 行 × {len(frame.columns)} 列"
@@ -474,6 +480,7 @@ def progress_line(plan: MappingPlan, frame: pd.DataFrame) -> str:
 
 
 def load_progress_line(plan: LoadPlan) -> str:
+    """渲染一条 load 例外通道的进度行。"""
     return (
         f"[{plan.index}/{plan.total}] {plan.load} → {plan.table}"
         "  已调用（load 例外通道，不走纯映射）"
@@ -550,6 +557,7 @@ def run_all(
     repo: Path | None,
 ) -> int:
     db_path.parent.mkdir(parents=True, exist_ok=True)
+    # 先建库文件再逐条写表：物化允许从零生成目标库。
     connection = sqlite3.connect(str(db_path))
     written: list[str] = []
     try:
@@ -589,6 +597,7 @@ def run_all(
 
 
 def main(argv: list[str]) -> int:
+    """命令行入口：先统一校验，再逐条写库；校验失败不写任何表，写库中途失败会留下已写入的表。"""
     # 进度要跨管道可读：Node 侧按 UTF-8 解码，所以不跟随控制台代码页。
     for stream in (sys.stdout, sys.stderr):
         try:

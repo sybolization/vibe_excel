@@ -1,4 +1,8 @@
-"""Author-declared column lineage; formulas are text, never executable SQL."""
+"""作者声明的列级血缘；公式只是文本，绝不会是可执行 SQL。
+
+数据来源是作者手写的 lineage JSON，本模块只做结构与类型校验。
+真实表/列是否存在，在 build 阶段对照只读数据库检查。
+"""
 
 import math
 from typing import Literal, NotRequired, TypedDict
@@ -6,16 +10,21 @@ from typing import Literal, NotRequired, TypedDict
 from ..util import VibeError, require_list, require_object
 
 LINEAGE_VERSION = "0.1"
+# rows=逐行过滤，group-key=按分组键过滤。
 FILTER_KINDS = ("rows", "group-key")
 FilterKind = Literal["rows", "group-key"]
 Number = int | float
 
 
 class ColumnRef(TypedDict):
+    """对某张表某一列的引用。"""
+
     table: str
     column: str
 
 
+# 一条列映射：输出表 output 的 name 列由 from 中的列按 formula 计算而来。
+# formula 只是声明文本，不会被解析或执行；note 为可选说明。
 ColumnEdge = TypedDict(
     "ColumnEdge",
     {
@@ -29,9 +38,12 @@ ColumnEdge = TypedDict(
 
 
 class BuiltColumnEdge(ColumnEdge):
+    """校验后的列映射；self 标记是否引用了同表其他列。"""
+
     self: bool
 
 
+# 一条行过滤约束：对输出表的行集合生效，kind 决定按行还是按分组键过滤。
 RowFilter = TypedDict(
     "RowFilter",
     {
@@ -46,11 +58,15 @@ RowFilter = TypedDict(
 
 
 class TableSource(TypedDict):
+    """输入表在 Excel 文件里的出处；sheet 可缺省。"""
+
     file: str
     sheet: NotRequired[str]
 
 
 class TableInput(TypedDict):
+    """作者声明的输入表；rows/columns 只是声明值，校验时以库为准。"""
+
     id: str
     label: NotRequired[str]
     origin: NotRequired[str]
@@ -60,10 +76,14 @@ class TableInput(TypedDict):
 
 
 class TableOutput(TableInput):
+    """作者声明的输出表；artifact 是可选 CSV 产物名。"""
+
     artifact: NotRequired[str]
 
 
 class LineageCase(TypedDict):
+    """案例元信息：id、标题、出处与可选截止时间。"""
+
     id: str
     title: str
     provenance: str
@@ -71,6 +91,8 @@ class LineageCase(TypedDict):
 
 
 class LineageDoc(TypedDict):
+    """完整的作者声明文档；inputs/outputs 至少各一张表。"""
+
     version: Literal["0.1"]
     case: LineageCase
     inputs: list[TableInput]
@@ -80,6 +102,8 @@ class LineageDoc(TypedDict):
 
 
 class BuiltTable(TypedDict):
+    """校验后的表：kind 区分输入/输出，rows 以数据库或 CSV 实际值为准。"""
+
     id: str
     label: str
     kind: Literal["input", "output"]
@@ -91,12 +115,16 @@ class BuiltTable(TypedDict):
 
 
 class BuiltSource(TypedDict):
+    """血缘文档的来源信息：数据库路径、库内表清单与 CSV 目录。"""
+
     db: str
     dbTables: list[str]
     csvDir: str | None
 
 
 class BuiltLineage(TypedDict):
+    """渲染层消费的最终血缘视图模型。"""
+
     version: Literal["0.1"]
     case: LineageCase
     builtAt: str
@@ -108,10 +136,12 @@ class BuiltLineage(TypedDict):
 
 
 def _fail(path: str, message: str) -> VibeError:
+    """构造带 JSON 路径的校验错误。"""
     return VibeError(f"lineage 校验失败：{path} {message}")
 
 
 def _object(value: object, path: str) -> dict[str, object]:
+    """要求对象，否则包装成带路径的校验错误。"""
     try:
         return require_object(value, path)
     except VibeError as error:
@@ -119,6 +149,7 @@ def _object(value: object, path: str) -> dict[str, object]:
 
 
 def _list(value: object, path: str) -> list[object]:
+    """要求数组，否则包装成带路径的校验错误。"""
     try:
         return require_list(value, path)
     except VibeError as error:
@@ -126,12 +157,14 @@ def _list(value: object, path: str) -> list[object]:
 
 
 def _text(value: object, path: str) -> str:
+    """要求非空字符串，否则报出字段路径。"""
     if not isinstance(value, str) or not value.strip():
         raise _fail(path, "必须是非空字符串")
     return value
 
 
 def _optional_text(value: object, path: str) -> str | None:
+    """可选字符串；缺省返回 None，其他类型报错。"""
     if value is None:
         return None
     if not isinstance(value, str):
@@ -140,6 +173,7 @@ def _optional_text(value: object, path: str) -> str | None:
 
 
 def _refs(value: object, path: str) -> list[ColumnRef]:
+    """校验列引用数组；缺省视为空引用。"""
     if value is None:
         return []
     result: list[ColumnRef] = []
@@ -155,6 +189,7 @@ def _refs(value: object, path: str) -> list[ColumnRef]:
 
 
 def _source(value: object, path: str) -> TableSource | None:
+    """校验 Excel 出处对象；sheet 为空时省略。"""
     if value is None:
         return None
     item = _object(value, path)
@@ -166,6 +201,10 @@ def _source(value: object, path: str) -> TableSource | None:
 
 
 def _table(value: object, path: str, *, output: bool) -> TableOutput:
+    """校验一张输入或输出表的声明。
+
+    rows 只接受非负有限数（拒绝 bool 与 NaN）；output=True 时才允许 artifact。
+    """
     item = _object(value, path)
     table: TableOutput = {"id": _text(item.get("id"), f"{path}.id")}
     label = _optional_text(item.get("label"), f"{path}.label")
@@ -200,7 +239,11 @@ def _table(value: object, path: str, *, output: bool) -> TableOutput:
 
 
 def parse_lineage(raw: object) -> LineageDoc:
-    """Validate the declaration's structure; real-column checks happen in build."""
+    """校验声明的结构；真实列检查在 build 阶段进行。
+
+    版本必须是 0.1，输入与输出至少各一张表，表 id 全局唯一；
+    formula 可缺省为空串，但绝不会被解析或执行。
+    """
     root = _object(raw, "$")
     version = _text(root.get("version"), "$.version")
     if version != LINEAGE_VERSION:
@@ -228,6 +271,7 @@ def parse_lineage(raw: object) -> LineageDoc:
         raise _fail("$.outputs", "至少需要一张输出表")
     seen: set[str] = set()
     for table in [*inputs, *outputs]:
+        # 输入与输出表 id 全局唯一，避免列引用产生歧义。
         if table["id"] in seen:
             raise _fail("$.inputs/outputs", f"表 id「{table['id']}」重复")
         seen.add(table["id"])

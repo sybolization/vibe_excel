@@ -1,4 +1,8 @@
-"""Join materialization records, source columns, and latest recorded writers."""
+"""合并物化记录、来源列与最近记录的写出者。
+
+输入是 control.db 读出的表事实、批次清单与 run 文档；输出是 inputs 视图模型。
+本模块不打开数据库，只做纯合并、排序与诊断，因此没有副作用。
+"""
 
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
@@ -23,6 +27,11 @@ from .types import (
 
 @dataclass(frozen=True)
 class _MaterializeEdge:
+    """一条物化记录。
+
+    表示某张表由哪个文件/工作表生成，以及最近一次生成它的运行。
+    """
+
     file: str
     sheet: str
     rows: Number | None
@@ -31,18 +40,29 @@ class _MaterializeEdge:
 
 @dataclass(frozen=True)
 class _DeriveEdge:
+    """一条派生记录。
+
+    保存写表节点的读集、函数、耗时与运行短 id，用于回溯派生链。
+    """
+
     reads: list[str]
     via: str
     file: str
+    name: str
     elapsed_ms: Number | None
     run_short: str
 
 
 def _newest_first(runs: Sequence[RunRecord]) -> list[RunRecord]:
+    """按 startedAt 从新到旧排序；没有开始时间的运行排到最后。"""
     return sorted(runs, key=lambda run: run["startedAt"] or "", reverse=True)
 
 
 def _elapsed_by_node(doc: dict[str, object]) -> dict[str, Number]:
+    """从 a/b 两轮执行记录里凑出各节点的耗时。
+
+    同一节点在两轮都有记录时保留先遇到的（a 轮优先）。
+    """
     elapsed: dict[str, Number] = {}
     rounds = as_object(doc.get("rounds"))
     for key in ("a", "b"):
@@ -57,6 +77,10 @@ def _elapsed_by_node(doc: dict[str, object]) -> dict[str, Number]:
 def _materialize_edges(
     runs: Sequence[RunRecord],
 ) -> tuple[dict[str, _MaterializeEdge], dict[str, int]]:
+    """收集每张表的物化边，并给文件/工作表分配稳定序号。
+
+    同时返回 sheet_rank，用于之后按清单顺序排列同一文件里的直接表。
+    """
     edges: dict[str, _MaterializeEdge] = {}
     sheet_rank: dict[str, int] = {}
     for run in _newest_first(runs):
@@ -71,6 +95,7 @@ def _materialize_edges(
                     continue
                 sheet = as_text(entry.get("sheet")) or "—"
                 sheet_rank.setdefault(f"{file}\0{sheet}", len(sheet_rank))
+                # 从新到旧遍历，setdefault 保证保留最近一次的物化边。
                 edges.setdefault(
                     table,
                     _MaterializeEdge(
@@ -81,6 +106,10 @@ def _materialize_edges(
 
 
 def _derive_edges(runs: Sequence[RunRecord]) -> dict[str, _DeriveEdge]:
+    """收集每张表的最近写出者。
+
+    节点耗时优先取 graph 里的值，缺失时回退到执行轮次记录。
+    """
     edges: dict[str, _DeriveEdge] = {}
     for run in _newest_first(runs):
         doc = as_object(run["doc"])
@@ -95,14 +124,19 @@ def _derive_edges(runs: Sequence[RunRecord]) -> dict[str, _DeriveEdge]:
                 ms = elapsed.get(node_id)
             edge = _DeriveEdge(
                 strings(node.get("reads")), fn if separator else call, file if separator else "",
-                ms, run["id"][:8],
+                as_text(node.get("name")) or "", ms, run["id"][:8],
             )
             for table in strings(node.get("writes")):
+                # 同样保留最新写出者，旧运行的节点不覆盖。
                 edges.setdefault(table, edge)
     return edges
 
 
 def _cyclic_tables(edges: dict[str, _DeriveEdge], names: set[str]) -> list[str]:
+    """用拓扑消解找出无法确定顺序的表。
+
+    反复移除没有未满足上游的表；剩下的就是循环依赖（含自环）。
+    """
     dependencies = {
         name: set(edges[name].reads).intersection(names) for name in names if name in edges
     }
@@ -128,7 +162,11 @@ def build_inputs(
     writes: Sequence[str] = (),
     sample: Callable[[str], TableData | None] | None = None,
 ) -> InputsView:
-    """Prefer materialization over in-table provenance, then trace latest writers."""
+    """组装 inputs 视图模型。
+
+    来源优先级是物化记录、表内来源列、最近写出者的派生链；追不到来源的表
+    归入 orphans 并写明原因（缺失输入或循环依赖）。
+    """
     if input is not None:
         batch, db_path, tables, runs = input["batch"], input["dbPath"], input["tables"], input["runs"]
         reads, writes, sample = input["reads"], input["writes"], input.get("sample")
@@ -180,14 +218,15 @@ def build_inputs(
             row = make_row(name, "import")
             row["sheet"], row["sheetCount"] = source["sheet"], len(table["sources"])
             if row["rows"] is None:
-                row["rows"] = sum(item["rows"] or 0 for item in table["sources"])
+                row["rows"] = source["rows"]
             rows[name], file_of[name], depth_of[name] = row, source["file"], 0
 
     direct_names = set(rows)
     pending = [table["name"] for table in tables if table["name"] not in rows]
-    # Each successful pass removes a table, so even deep chains and cycles terminate.
+    # 每轮成功处理都会移除一张表，因此再深的链和环也能终止。
     while pending:
         progressed = False
+        # 从尾部回扫，能在同一轮里让短链先落位，减少循环次数。
         for index in range(len(pending) - 1, -1, -1):
             name = pending[index]
             edge = derive.get(name)
@@ -200,7 +239,8 @@ def build_inputs(
             row["from"] = list(edge.reads)
             row["via"] = edge.via
             row["writer"] = {
-                "fn": edge.via, "file": edge.file, "elapsedMs": edge.elapsed_ms, "runShort": edge.run_short
+                "fn": edge.via, "name": edge.name, "file": edge.file,
+                "elapsedMs": edge.elapsed_ms, "runShort": edge.run_short
             }
             row["depth"] = max(depth_of[upstream] for upstream in known) + 1
             rows[name], file_of[name], depth_of[name] = row, file_of[known[0]], row["depth"]
@@ -211,6 +251,7 @@ def build_inputs(
 
     orphans = [make_row(name, "unknown") for name in pending]
     for name in pending:
+        # 能查到派生边说明是链断了或成环；否则就是完全没有来源记录。
         reason = "缺失输入或循环依赖" if name in derive else "没有物化、导入或写出者记录"
         warnings.append(f"表「{name}」追不到原始文件：{reason}")
     for name, row in rows.items():
@@ -231,6 +272,7 @@ def build_inputs(
         meta = manifest.get(name)
         own = [row for row in rows.values() if file_of[row["name"]] == name]
         direct = [row for row in own if row["kind"] != "derive"]
+        # 同一文件内先按 manifest 里工作表的出现顺序，再让导入排在派生之前。
         direct.sort(
             key=lambda row: (
                 sheet_rank.get(f"{name}\0{row['sheet']}", 2**53),

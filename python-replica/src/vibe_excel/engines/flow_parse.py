@@ -19,9 +19,11 @@ from __future__ import annotations
 
 import ast
 import builtins
+import io
 import json
 import re
 import sys
+import tokenize
 import traceback
 
 # 平台固定递给节点的入参（`flow-run.ts` 的 kwargs）。它们不需要表标注。
@@ -77,6 +79,7 @@ def _table_annotation(annotation: ast.expr | None) -> str | None:
 
 
 def _annotation_text(annotation: ast.expr | None) -> str:
+    """把注解还原成源码文本；失败时退回节点类型名，只为报错信息不中断。"""
     if annotation is None:
         return "(无)"
     try:
@@ -100,6 +103,7 @@ def _as_table(name: str, where: str, line: int, *, what: str) -> str:
 
 
 def _node_name_ok(name: str, line: int) -> None:
+    """节点名要能进日志与 run.json，必须是 ASCII 标识符。"""
     if not IDENT_RE.match(name):
         raise ContractError(
             "NODE_NAME_BAD",
@@ -122,6 +126,7 @@ def _module_functions(tree: ast.Module) -> tuple[dict[str, ast.FunctionDef], set
 
 
 def _find_main(tree: ast.Module) -> ast.FunctionDef:
+    """定位模块级 main；缺失、重复或 async 分别给出不同契约错误。"""
     mains = [node for node in tree.body if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == "main"]
     if not mains:
         raise ContractError(
@@ -138,6 +143,7 @@ def _find_main(tree: ast.Module) -> ast.FunctionDef:
 
 
 def _check_main_is_linear(main: ast.FunctionDef) -> None:
+    """拒绝 main 顶层的分支/循环/定义：main 必须一行一次节点调用。"""
     for stmt in main.body:
         if isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
             raise ContractError(
@@ -156,6 +162,7 @@ def _check_main_is_linear(main: ast.FunctionDef) -> None:
 
 
 def _kind_name(stmt: ast.stmt) -> str:
+    """把 AST 语句节点映射成给人看的种类名。"""
     names = {
         ast.If: "if",
         ast.For: "for",
@@ -176,6 +183,7 @@ def _kind_name(stmt: ast.stmt) -> str:
 
 
 def _check_main_params(main: ast.FunctionDef) -> None:
+    """禁止在 main 的参数上写 t: 标注（main 不是节点）。"""
     for arg in _all_args(main):
         if _table_annotation(arg.annotation) is not None:
             raise ContractError(
@@ -187,11 +195,13 @@ def _check_main_params(main: ast.FunctionDef) -> None:
 
 
 def _all_args(fn: ast.FunctionDef) -> list[ast.arg]:
+    """收集除 vararg/kwarg 外的全部具名参数（位置限定也算）。"""
     args = fn.args
     return [*args.posonlyargs, *args.args, *args.kwonlyargs]
 
 
 def _calls_in(stmt: ast.stmt) -> list[ast.Call]:
+    """语句里出现的全部 Call 节点（含嵌套），供 main 扫描节点调用。"""
     return [node for node in ast.walk(stmt) if isinstance(node, ast.Call)]
 
 
@@ -305,8 +315,10 @@ def _collect_steps(fn: ast.FunctionDef) -> list[dict[str, object]]:
     return steps
 
 
-def _describe_node(fn: ast.FunctionDef, name: str) -> dict[str, object]:
+def _describe_node(fn: ast.FunctionDef, name: str, names: dict[int, str]) -> dict[str, object]:
+    """从函数签名与 docstring 生成节点规格：标题、读表、写表、步骤与展示名。"""
     line = fn.lineno
+    # 只取第一行做标题：流程图上一行就够。
     title = ast.get_docstring(fn, clean=True)
     if title is None or title.strip() == "":
         raise ContractError(
@@ -374,6 +386,7 @@ def _describe_node(fn: ast.FunctionDef, name: str) -> dict[str, object]:
             "返回标注声明这个节点**写**哪张表（写成字符串字面量）",
             line,
         )
+    # 签名只能声明一张写表：一个节点写多张表在代码即流程下表达不了。
     writes.append(_as_table(table, f"节点 {name} 的返回值", line, what="返回标注"))
 
     return {
@@ -383,10 +396,35 @@ def _describe_node(fn: ast.FunctionDef, name: str) -> dict[str, object]:
         "reads": reads,
         "writes": writes,
         "steps": _collect_steps(fn),
+        **({"name": names[fn.lineno - 1]} if (fn.lineno - 1) in names else {}),
     }
 
 
+# `# name：中文` —— 节点在流程图上的名字。
+# 只认紧挨着 `def` 上一行的这一行注释（不留空行），不认函数体里的：
+# 一个名字写在声明旁边，改函数时顺手就会一起改。
+NAME_COMMENT_RE = re.compile(r"#\s*name\s*[:：]\s*(\S[^\n]*?)\s*$", re.IGNORECASE)
+
+
+def _collect_name_comments(source: str) -> dict[int, str]:
+    """行号 → 中文名。解析不出来就返回空表：名字只影响展示，不该让整条流程失败。"""
+
+    out: dict[int, str] = {}
+    try:
+        tokens = tokenize.generate_tokens(io.StringIO(source).readline)
+        for token in tokens:
+            if token.type != tokenize.COMMENT:
+                continue
+            matched = NAME_COMMENT_RE.search(token.string)
+            if matched:
+                out[token.start[0]] = matched.group(1).strip()
+    except (tokenize.TokenError, IndentationError):
+        return {}
+    return out
+
+
 def parse(source: str, entry: str) -> dict[str, object]:
+    """解析入口源码，返回 {entry, nodes, warnings}；契约违反抛 ContractError。"""
     # BOM 会让 ast.parse 报「invalid non-printable character」，先剥掉。
     if source.startswith("\ufeff"):
         source = source[1:]
@@ -400,6 +438,7 @@ def parse(source: str, entry: str) -> dict[str, object]:
             error.lineno,
         ) from error
 
+    names = _collect_name_comments(source)
     sync_defs, async_names = _module_functions(tree)
     main = _find_main(tree)
     _check_main_params(main)
@@ -419,7 +458,7 @@ def parse(source: str, entry: str) -> dict[str, object]:
                 fn.lineno,
             )
         seen.add(name)
-        nodes.append(_describe_node(fn, name))
+        nodes.append(_describe_node(fn, name, names))
 
     # 带表标注却没被 main 调用：多半是模型以为它已经进图了。
     for name, fn in sync_defs.items():
@@ -449,6 +488,7 @@ def _emit(payload: dict[str, object], code: int) -> int:
 
 
 def main(argv: list[str]) -> int:
+    """命令行入口：从 stdin 读源码，只输出 JSON，退出码区分成功/契约违反/内部错误。"""
     entry = argv[0] if argv else "pipeline.py"
     try:
         source = sys.stdin.buffer.read().decode("utf-8")

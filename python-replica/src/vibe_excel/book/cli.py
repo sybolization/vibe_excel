@@ -1,4 +1,9 @@
-"""Command-line book export: only the requested HTML file is written."""
+"""命令行 book 导出：只写出请求的 HTML 文件。
+
+输入是 store 目录（含 control.db、runs 与 sessions），输出是一个自包含 HTML。
+采集阶段全部只读，唯一写入目标是 --out 指定的 HTML；会拒绝把结果写回源数据库
+或覆盖非 HTML 的现有文件。
+"""
 
 import sqlite3
 import sys
@@ -13,6 +18,11 @@ USAGE = "build --store <store 目录> --out <html 路径> [--session <会话 id>
 
 
 def _arguments(argv: list[str]) -> dict[str, str]:
+    """解析 build 子命令的参数。
+
+    只接受 --store/--out/--session/--run 四个标志，并强制要求前两个；
+    未知或缺少值的标志直接抛出面向用户的用法错误。
+    """
     if not argv or argv[0] != "build":
         raise VibeError(f"用法：{USAGE}")
     flags: dict[str, str] = {}
@@ -32,6 +42,10 @@ def _arguments(argv: list[str]) -> dict[str, str]:
 
 
 def _summarize(view: BookView) -> None:
+    """打印人类可读的采集摘要。
+
+    只影响终端输出，不改变视图模型；可选页面缺失时用占位符呈现。
+    """
     program, session, graph, inputs = view["program"], view["session"], view["graph"], view["inputs"]
     print(f"程序   {program['name'] if program is not None else '—'}")
     print(f"会话   {session['name'] + '（' + session['id'][:8] + '）' if session is not None else '（无会话）'}")
@@ -52,14 +66,20 @@ def _summarize(view: BookView) -> None:
 
 
 def run_cli(argv: list[str]) -> int:
+    """执行一次导出：采集视图模型、渲染 HTML、落盘并打印摘要。
+
+    已知的用户错误与 I/O 错误统一转成返回码 1，不向调用方抛出。
+    """
     if argv in (["--help"], ["-h"], ["build", "--help"], ["build", "-h"]):
         print(f"用法：{USAGE}\n产出：一个自包含的 HTML 账页，无服务器或网络依赖")
         return 0
     try:
         flags = _arguments(argv)
         store, out = Path(flags["store"]).resolve(), Path(flags["out"]).resolve()
+        # 输出绝不能落在源库上，否则会直接破坏 control.db。
         if out == store / "control.db" or out.suffix.lower() == ".db":
             raise VibeError(f"不能把 HTML 导出到源数据库：{out}")
+        # 已有文件只允许是 HTML，避免误覆盖别的产物。
         if out.exists() and out.suffix.lower() not in (".html", ".htm"):
             raise VibeError(f"不能覆盖现有源文件：{out}")
         view = collect_book(store, session_id=flags.get("session"), run_id=flags.get("run"))
@@ -75,6 +95,7 @@ def run_cli(argv: list[str]) -> int:
 
 
 def main() -> int:
+    """供 `python -m vibe_excel.book` 与控制台脚本调用的入口。"""
     return run_cli(sys.argv[1:])
 
 
