@@ -55,12 +55,7 @@ body.ix .fbar{right:12px}
   font:12px/1.4 var(--font);box-shadow:var(--shadow);transition:opacity .16s,transform .16s;
   max-width:70vw}
 .ix-note.on{opacity:1;transform:translate(-50%,0)}
-/* ask 浮层里的按钮：与账页 .btn 同一档尺寸。app.css 目前还没给 .tbtn 定义，索引页先补上。 */
-.ask .tbtn{height:26px;padding:0 11px;border-radius:7px;font:12px var(--font);
-  color:var(--ink2);background:var(--fill)}
-.ask .tbtn:hover{background:var(--hover);color:var(--ink)}
-.ask .tbtn.go{background:var(--accent);color:var(--on-accent)}
-.ask .tbtn.go:hover{background:var(--accent-fill)}
+
 .ask .tbtn:disabled{opacity:.55;cursor:default}
 /* 新建项目：顶栏的主操作。尺寸沿用 .btn，颜色用强调色，跟页面里别的动作分得开。 */
 .ix-new{height:28px;padding:0 12px;border-radius:8px;font:500 12.5px var(--font);

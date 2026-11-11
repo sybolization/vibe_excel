@@ -367,10 +367,11 @@ button{font:inherit;color:inherit;background:none;border:0;cursor:pointer}
 /* ---------- 服务模式：导入、移出、撤回 ---------- */
 /* 托盘底部的两个动词只在服务模式出现；静态页面上根本没有这两个按钮 */
 .tray-ft{display:flex;gap:6px;padding:7px 3px 1px;margin-top:5px;border-top:1px solid var(--line)}
-.tbt{flex:1;height:26px;border-radius:8px;font:11.5px/1 var(--font);color:var(--ink2);background:var(--fill)}
-.tbt:hover{background:var(--hover);color:var(--ink)}
-.tbt:disabled{opacity:.42;cursor:default}
-.tbt.go{background:var(--accent-soft);color:var(--accent)}
+.tbtn{flex:0 0 auto;height:26px;padding:0 11px;border-radius:8px;
+  font:11.5px/1 var(--font);color:var(--ink2);background:var(--fill)}
+.tbtn:hover{background:var(--hover);color:var(--ink)}
+.tbtn:disabled{opacity:.42;cursor:default}
+.tbtn.go{background:var(--accent-soft);color:var(--accent)}
 .tray .hd .imp.off{opacity:.4;cursor:default}
 
 /* 删除入口只在悬停时出现：常驻一个小叉，托盘会很吵 */

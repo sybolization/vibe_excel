@@ -18,8 +18,6 @@ import sys
 import time
 from pathlib import Path
 
-DONE = "__DONE__"
-
 _SUPERVISOR = '''"""跑一条命令，把输出和退出码写进日志。由 bg.py 拉起，不给人直接调用。"""
 
 from __future__ import annotations
