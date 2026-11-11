@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import os
 import subprocess
 import sys
 import time
@@ -18,6 +19,7 @@ from vibe_excel.book.jobs import (
     MAX_JOBS,
     Finished,
     Watcher,
+    _decode_log,
     enforce_limits,
     ensure_helper,
     harvest,
@@ -45,12 +47,15 @@ def test_helper_is_written_once_and_runnable(tmp_path: Path) -> None:
     ensure_helper(tmp_path)
     assert target.read_text(encoding="utf-8") == first
     # 用法不对时它得说清楚，而不是静默退出
+    # 子进程要 UTF-8 输出：中文 Windows 默认 cp936，测试按 UTF-8 读就会错
+    env = {**os.environ, "PYTHONUTF8": "1", "PYTHONIOENCODING": "utf-8"}
     result = subprocess.run(
         [sys.executable, str(target)],
         capture_output=True,
         text=True,
         encoding="utf-8",
         errors="replace",
+        env=env,
     )
     assert result.returncode == 2
     assert "用法" in result.stdout
@@ -92,6 +97,14 @@ def test_enforce_limits_drops_expired_and_extra_jobs(tmp_path: Path, monkeypatch
     assert "old" in dropped
     # 超量的也要清掉，别让脱离进程无限堆着
     assert len(dropped) >= 3
+
+
+def test_decode_log_reads_utf8_and_gbk() -> None:
+    """命令可能吐 UTF-8，也可能吐 GBK（中文 Windows 的默认），两种都要读得懂。"""
+    assert _decode_log("中文输出 ok".encode()) == "中文输出 ok"
+    assert _decode_log("中文输出 ok".encode("gbk")) == "中文输出 ok"
+    # 两种都不是的字节也不能炸：给一串能看的替换符，比抛异常强
+    assert _decode_log(b"\xff\xfe\xff") != ""
 
 
 def test_wake_text_says_what_happened() -> None:

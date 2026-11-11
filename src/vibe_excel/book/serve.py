@@ -543,7 +543,7 @@ class _Handler(BaseHTTPRequestHandler):
             self._api({"ok": True, "file": result, "state": self._state(wanted)})
             return
         if path == "/api/inputs/delete":
-            payload = json.loads(body or b"{}")
+            payload = self._payload(body)
             ground = resolve_ground_truth()
             name = str(payload.get("name") or "")
             program_id = str(payload.get("programId") or "")
@@ -560,12 +560,12 @@ class _Handler(BaseHTTPRequestHandler):
         if path == "/api/inputs/undo":
             ground = resolve_ground_truth()
             # 撤回的是这个项目所在 store 的最近一次移出，不是第一个 store 的
-            owner = self._pick_store(json.loads(body or b"{}").get("store"))
+            owner = self._pick_store(self._payload(body).get("store"))
             event = undo_removal(ground, owner)
             self._api({"ok": True, "event": event, "state": self._state(owner)})
             return
         if path == "/api/inputs/rebuild":
-            owner = self._pick_store(json.loads(body or b"{}").get("store"))
+            owner = self._pick_store(self._payload(body).get("store"))
             result = _rebuild_batch()
             archived = promote_trash(owner) if result["code"] == 0 else []
             self._api(

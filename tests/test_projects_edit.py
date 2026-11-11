@@ -24,6 +24,7 @@ from vibe_excel.book.projects_edit import (
     TABLE_NAME,
     archive_project,
     create_project,
+    create_workspace,
 )
 from vibe_excel.book.serve import resolve_store
 from vibe_excel.book.types import ProjectSummary
@@ -354,6 +355,37 @@ def test_resolve_store_only_accepts_the_stores_the_service_opened(tmp_path: Path
         resolve_store([known], str(elsewhere))
     with pytest.raises(VibeError, match="缺少 store"):
         resolve_store([known], "")
+
+
+def test_create_workspace_makes_dir_and_program(tmp_path: Path) -> None:
+    """新建项目 = 新建工作区：目录、control.db、空项目三样都要有。"""
+    root = tmp_path / "root"
+    root.mkdir()
+    workspace, program = create_workspace(root, "季度分析")
+
+    assert workspace == root / "季度分析"
+    assert (workspace / "control.db").is_file()
+    assert program.name == "季度分析"
+    # 空项目还没有会话：页面会走「这个项目还没跑过」
+    assert [item["id"] for item in collect_projects(workspace)] == [str(program.id)]
+
+
+def test_create_workspace_rejects_duplicate_and_rolls_back(tmp_path: Path) -> None:
+    root = tmp_path / "root"
+    root.mkdir()
+    create_workspace(root, "同名")
+
+    with pytest.raises(VibeError, match="同名的工作区"):
+        create_workspace(root, "同名")
+
+    # 名字被别的文件占着：报错，而不是把那个文件当目录用
+    (root / "占位").write_text("x", encoding="utf-8")
+    with pytest.raises(VibeError, match="占用"):
+        create_workspace(root, "占位")
+
+    # 非法字符在 _clean_name 那一步就被挡住
+    with pytest.raises(VibeError):
+        create_workspace(root, "a/b")
 
 
 def test_render_index_offers_create_only_when_server_hosted() -> None:

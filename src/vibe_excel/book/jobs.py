@@ -60,6 +60,20 @@ def _jobs_root(workspace: Path) -> Path:
     return workspace / JOBS_DIR
 
 
+def _decode_log(data: bytes) -> str:
+    """日志可能是 UTF-8，也可能是中文 Windows 的 GBK——两种都要读得懂。
+
+    bg.py 会给子进程设 PYTHONUTF8，但它跑的是任意命令（还有 cmd 内建），
+    指望每个命令都吐 UTF-8 不现实；这里按「先严格 UTF-8，失败再 GBK」解。
+    """
+    for encoding in ("utf-8", "gbk"):
+        try:
+            return data.decode(encoding)
+        except UnicodeDecodeError:
+            continue
+    return data.decode("utf-8", "replace")
+
+
 def _read_log(path: Path) -> str:
     try:
         data = path.read_bytes()
@@ -67,7 +81,7 @@ def _read_log(path: Path) -> str:
         return ""
     if len(data) > MAX_LOG_BYTES:
         data = data[:MAX_LOG_BYTES]
-    text = data.decode("utf-8", "replace")
+    text = _decode_log(data)
     # 末尾那行是哨兵，不该出现在正文里
     return text.rsplit(DONE_MARK, 1)[0].rstrip()
 
