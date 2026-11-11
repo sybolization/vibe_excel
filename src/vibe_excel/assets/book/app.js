@@ -1,6 +1,9 @@
 /* 样张：左侧「来源」托盘 + 玻璃 chrome，画布沿用现在的排法。 */
 (() => {
   const V = JSON.parse(document.getElementById("book-data").textContent);
+  /* 站点模式把「从哪来」写在 <body> 上：有上一级就在顶栏给返回入口。
+     单页模式下这个属性不在，行为与以前完全一致。 */
+  const HOME = document.body.dataset.home ?? "";
   const D = V.diagram;
   /* 画布只画骨架：文件 → sheet → 机器 → 产物。
      原料表并进它的 sheet（sheet 卡片上多一行「产出：表名」），
@@ -373,7 +376,7 @@
   top.className = "glass fbar";
   const same = Boolean(V.currentRevision && V.lastRunRevision && V.currentRevision === V.lastRunRevision);
   top.innerHTML = `
-    <div class="brand"><b>${esc(V.program === null ? "—" : V.program.name)}</b><span>${esc(V.session === null ? "" : V.session.draftBranch)}</span></div>
+    <div class="brand">${HOME === "" ? "" : `<a class="home" href="${esc(HOME)}" title="返回项目">←</a>`}<b>${esc(V.program === null ? "—" : V.program.name)}</b><span>${esc(V.session === null ? "" : V.session.draftBranch)}</span></div>
     <span class="rev">工作集 <b>${esc(short(V.currentRevision))}</b></span>
     <span class="rev">上次运行 <b>${esc(short(V.lastRunRevision))}</b></span>
     ${same || V.lastRunRevision === null ? "" : '<span class="chip note">数据已更新</span>'}

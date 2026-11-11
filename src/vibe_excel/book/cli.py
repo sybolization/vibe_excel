@@ -1,20 +1,29 @@
-"""命令行 book 导出：只写出请求的 HTML 文件。
+"""命令行 book 导出：一个自包含 HTML，或者一整个可离线打开的站点。
 
-输入是 store 目录（含 control.db、runs 与 sessions），输出是一个自包含 HTML。
-采集阶段全部只读，唯一写入目标是 --out 指定的 HTML；会拒绝把结果写回源数据库
-或覆盖非 HTML 的现有文件。
+输入是 store 目录（含 control.db、runs 与 sessions）。两种输出：
+
+- `--out x.html`     一个项目的单页（旧的用法，行为不变）
+- `--out <目录>`     站点：`index.html` 项目索引 + 每个项目一页 + `fonts/`
+
+采集阶段全部只读，唯一写入目标是 --out；会拒绝把结果写回源数据库。
 """
 
+import shutil
 import sqlite3
 import sys
 from pathlib import Path
 
 from ..util import VibeError
 from .collect import collect_book
-from .render import render_book
+from .index_render import render_index
+from .projects import collect_projects, page_name
+from .render import _ASSETS, render_book
 from .types import BookView
 
-USAGE = "build --store <store 目录> --out <html 路径> [--session <会话 id>] [--run <运行 id>]"
+USAGE = (
+    "build --store <store 目录> --out <html 路径 | 站点目录> [--session <会话 id>] [--run <运行 id>]\n"
+    "        --out 以 .html/.htm 结尾出单页；否则当作站点目录，出 index.html + 每项目一页"
+)
 
 
 def _arguments(argv: list[str]) -> dict[str, str]:
@@ -65,13 +74,62 @@ def _summarize(view: BookView) -> None:
         print(f"注意   {warning}")
 
 
+def _install_fonts(out: Path) -> None:
+    """把随包的字体复制到站点目录。
+
+    原样复制，不改文件名、不改内容——许可第 2 条禁止任何修改，
+    第 4 条要求任何副本都带上版权声明与协议，所以 LICENSE 一起搬。
+    """
+    source = _ASSETS / "fonts"
+    if not source.is_dir():
+        print(f"注意：包内缺少字体目录 {source}，页面将回退到本机字体", file=sys.stderr)
+        return
+    shutil.copytree(source, out / "fonts", dirs_exist_ok=True)
+
+
+def _build_site(store: Path, out: Path) -> int:
+    """渲染整个站点：索引 + 每个项目一页 + 字体。
+
+    单个项目采不到（没有会话、库被占用等）不拖垮整站：那一行还列着，只是不给链接。
+    """
+    projects = collect_projects(store)
+    out.mkdir(parents=True, exist_ok=True)
+    _install_fonts(out)
+
+    pages: dict[str, str] = {}
+    for project in projects:
+        name = page_name(project["id"])
+        try:
+            view = collect_book(
+                store, program_id=project["id"], session_id=project["activeSessionId"]
+            )
+        except (VibeError, sqlite3.Error, OSError) as error:
+            print(f"  跳过 {project['name']}：{error}", file=sys.stderr)
+            continue
+        (out / name).write_text(
+            render_book(view, fonts="fonts/", home="index.html"), encoding="utf-8"
+        )
+        pages[project["id"]] = name
+
+    index = render_index(
+        projects, store_label=store.name or str(store), pages=pages
+    )
+    (out / "index.html").write_text(index, encoding="utf-8")
+    print(f"程序   {len(projects)} 个，已出页面 {len(pages)} 个")
+    for project in projects:
+        state = "已出页面" if project["id"] in pages else "未出页面"
+        print(f"       {project['name']:<18} {project['runCount']} 次运行 {state}")
+    print(f"\n落盘   {out}\\index.html（{round(len(index.encode('utf-8')) / 1024)} KB）")
+    return 0
+
+
 def run_cli(argv: list[str]) -> int:
     """执行一次导出：采集视图模型、渲染 HTML、落盘并打印摘要。
 
     已知的用户错误与 I/O 错误统一转成返回码 1，不向调用方抛出。
     """
     if argv in (["--help"], ["-h"], ["build", "--help"], ["build", "-h"]):
-        print(f"用法：{USAGE}\n产出：一个自包含的 HTML 账页，无服务器或网络依赖")
+        print(f"用法：{USAGE}\n产出：一个自包含的 HTML 账页，或一个可离线打开的站点目录")
         return 0
     try:
         flags = _arguments(argv)
@@ -79,9 +137,18 @@ def run_cli(argv: list[str]) -> int:
         # 输出绝不能落在源库上，否则会直接破坏 control.db。
         if out == store / "control.db" or out.suffix.lower() == ".db":
             raise VibeError(f"不能把 HTML 导出到源数据库：{out}")
-        # 已有文件只允许是 HTML，避免误覆盖别的产物。
-        if out.exists() and out.suffix.lower() not in (".html", ".htm"):
+        if out.suffix.lower() not in (".html", ".htm"):
+            # 目录模式：一次把整个 store 的入口和每个项目的账页都出掉。
+            # 目录已存在是常态（反复重建站点），只有同名文件挡路才算错误。
+            if out.exists() and not out.is_dir():
+                raise VibeError(f"--out 是目录模式，但这里已有一个文件：{out}")
+            if out == store:
+                raise VibeError(f"站点目录不能就是 store 本身：{out}")
+            return _build_site(store, out)
+        # 单页模式下已有文件只允许是 HTML，避免误覆盖别的产物。
+        if out.exists() and out.is_file() and out.suffix.lower() not in (".html", ".htm"):
             raise VibeError(f"不能覆盖现有源文件：{out}")
+
         view = collect_book(store, session_id=flags.get("session"), run_id=flags.get("run"))
         html = render_book(view)
         out.parent.mkdir(parents=True, exist_ok=True)

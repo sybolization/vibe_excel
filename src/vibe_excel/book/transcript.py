@@ -229,18 +229,19 @@ def parse_conversation(
 
         if role == "toolResult":
             call_id = message.get("toolCallId")
-            block = pending.get(call_id) if isinstance(call_id, str) else None
-            if block is None:
+            # 用独立名字：上面那个 block 已经定型成 ChatBlock，这里可能是 None。
+            target = pending.get(call_id) if isinstance(call_id, str) else None
+            if target is None:
                 continue
-            block["ok"] = message.get("isError") is not True
+            target["ok"] = message.get("isError") is not True
             duration = message.get("durationMs")
-            block["ms"] = duration if isinstance(duration, (int, float)) else None
+            target["ms"] = duration if isinstance(duration, (int, float)) else None
             result = _text_parts(content)
             if result:
-                block["result"] = clip(result, _CLIP_RESULT)
+                target["result"] = clip(result, _CLIP_RESULT)
             tool_name = message.get("toolName")
             if isinstance(tool_name, str) and tool_name:
-                block["name"] = tool_name
+                target["name"] = tool_name
 
     if not blocks:
         _diagnostic(f"对话 {file} 没有可展示的消息", warnings)

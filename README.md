@@ -50,14 +50,40 @@ uv run pytest
 ## 只读导出
 
 ```powershell
+# 站点（推荐）：一个目录，索引 + 每个项目一页 + 字体，离线可开
+uv run python -m vibe_excel.book build --store C:\data\store --out .\exports\site
+
+# 单页：只出某一个项目的账页，样式与站点里的项目页相同
 uv run python -m vibe_excel.book build --store C:\data\store --out .\exports\book.html
+
 uv run python -m vibe_excel.sqlmap build --db C:\data\hr.db --lineage .\lineage.json --csv C:\data\reports --out .\exports\sqlmap
 uv run vibe-encode record --run .\runs\author-01 --id import-01 --family import --question "把 HR 导出表建成 hr.db" --corpus .\corpus
 ```
+
+`--out` 以 `.html` / `.htm` 结尾时出单页，否则当作站点目录。站点目录的结构：
+
+```
+site/
+  index.html      项目列表：每个项目一行，点进去
+  p-<id前8位>.html  一个项目的账页（页面左上角有返回）
+  fonts/          鸿蒙字体 + 许可
+```
+
+顶部黑色导航条两端都能切换深色 / 浅色，选择记在浏览器里。
+
+## 字体
+
+页面用 **HarmonyOS Sans SC**，原版 TTF 随包分发在 `src/vibe_excel/assets/book/fonts/`，
+`book build` 时会原样复制到 `fonts/`。
+
+- 不做子集化、不转格式：`HarmonyOS Sans Fonts License Agreement` 第 2 条禁止对字体做任何修改。
+- 版权声明与协议随字体一起走（`fonts/LICENSE.txt`，第 4 条）。
+- 只随软件分发，不单独分发字体（第 3 条）。
+- 只带 Regular / Medium 两个字重，600 由 Medium 合成。
 
 ## 边界
 
 - 业务库是 SQLite，Excel 只是边界格式；平台不解析公式语义，也不推断 SQL 血缘。
 - 双跑比对范围是声明的产出（`flow.outputs` 表 + `out` 目录文件），不是整库哈希。
 - 发布证据绑定代码提交：证据过期时拒绝合入，而不是静默使用旧证据。
-- HTML 导出内嵌全部 CSS/JS/JSON，可离线打开；前端资产与原版逐字节一致。
+- HTML 导出内嵌全部 CSS/JS/JSON，可离线打开；站点模式的字体是侧车文件（体积原因），其余仍然内嵌。

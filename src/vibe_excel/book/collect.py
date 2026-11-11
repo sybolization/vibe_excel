@@ -547,16 +547,20 @@ def _elapsed(start: str | None, finish: str | None, warnings: list[str], run_id:
 def collect_book(
     store: str | Path | CollectOptions,
     *,
+    program_id: str | None = None,
     session_id: str | None = None,
     run_id: str | None = None,
 ) -> BookView:
     """采集整本 book 的视图模型。
 
+    program_id：只在该项目下选会话。站点模式一次渲染多个项目时必须给，
+    否则每个项目都会落到全库最近活跃的那个会话上。
     默认选取最新会话，并优先选 kind=flow 且可构建 graph 的运行（不是单纯最新）。
     视图同时区分当前数据版本（revisions[0]）与选中运行使用的输入版本。
     是 book 的唯一公开采集入口，对 control.db 与运行库都只用只读连接。
     """
     if isinstance(store, dict):
+        program_id = store.get("programId", program_id)
         session_id = store.get("sessionId", session_id)
         run_id = store.get("runId", run_id)
         store = store["store"]
@@ -569,6 +573,8 @@ def collect_book(
         with readonly_database(control_path) as db:
             # 按 updated_at 倒序，未指定会话时默认落到最近活跃的那个。
             sessions = _query(db, "SELECT * FROM sessions ORDER BY updated_at DESC")
+            if program_id is not None:
+                sessions = [row for row in sessions if as_text(row.get("program_id")) == program_id]
             chosen = next((row for row in sessions if row.get("id") == session_id), None) if session_id is not None else next(iter(sessions), None)
             if chosen is None:
                 raise VibeError(f"control.db 里找不到会话「{session_id}」" if session_id is not None else "control.db 里没有会话")

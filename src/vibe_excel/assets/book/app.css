@@ -353,3 +353,7 @@ button{font:inherit;color:inherit;background:none;border:0;cursor:pointer}
 .conv .ct{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--ink)}
 .conv .cm{flex:none;font-size:11px;color:var(--muted)}
 .conv.draft .ct{color:var(--ink2);font-style:normal}
+
+/* 站点模式：顶栏的返回入口。单页模式下不渲染。 */
+.brand a.home{align-self:center;display:flex;align-items:center;justify-content:center;width:20px;height:20px;margin-right:-3px;border-radius:6px;color:var(--ink2);font-size:12px;line-height:1;text-decoration:none}
+.brand a.home:hover{background:var(--fill);color:var(--ink)}

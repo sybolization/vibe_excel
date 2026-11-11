@@ -281,6 +281,41 @@ class DiagramView(TypedDict):
     tableCount: int
 
 
+class SessionSummary(TypedDict):
+    """项目下的一个会话，只放首页要显示的字段。"""
+
+    id: str
+    name: str
+    # active / archived
+    status: str
+    draftBranch: str
+    updatedAt: str
+
+
+class RunBrief(TypedDict):
+    """最近一次运行的摘要；首页不展开的话就看这三个字段。"""
+
+    id: str
+    status: str
+    at: str | None
+    # 两次跑的结果是否一致；note 里没有标记时是 None（未知，不等于不一致）。
+    identical: bool | None
+
+
+class ProjectSummary(TypedDict):
+    """首页的一行：一个项目，加上它最近的状态。"""
+
+    id: str
+    name: str
+    createdAt: str
+    sessions: list[SessionSummary]
+    # 默认进入哪个会话：活动的、且 updated_at 最新的那个；没有会话时为 None。
+    activeSessionId: str | None
+    runCount: int
+    publishCount: int
+    lastRun: RunBrief | None
+
+
 class ProgramView(TypedDict):
     """control.db programs 表里的一行，用于页面标题。"""
 
@@ -370,6 +405,7 @@ class CollectOptions(TypedDict):
     """兼容原前端调用的 collect 入参映射；store 必填，会话与运行可选。"""
 
     store: str
+    programId: NotRequired[str]
     sessionId: NotRequired[str]
     runId: NotRequired[str]
 
