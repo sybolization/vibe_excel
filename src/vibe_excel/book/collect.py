@@ -715,4 +715,3 @@ def collect_book(
     }
 
 
-collectBook = collect_book

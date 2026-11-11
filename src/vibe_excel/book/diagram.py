@@ -189,4 +189,3 @@ def build_diagram(
     }
 
 
-buildDiagram = build_diagram

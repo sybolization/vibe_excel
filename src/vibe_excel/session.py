@@ -396,15 +396,6 @@ class SessionStore:
         """更新会话的 updated_at；调用方负责事务。"""
         self.db.execute("UPDATE sessions SET updated_at=? WHERE id=?", (now(), identifier))
 
-    def archive_session(self, identifier: SessionId) -> None:
-        """归档会话：先移除工作树，再把状态改为 archived。"""
-        session = self._require_session(identifier)
-        git.remove_worktree(self.program_repo_path(session.program_id), session.worktree_path)
-        with self.db:
-            self.db.execute(
-                "UPDATE sessions SET status='archived',updated_at=? WHERE id=?", (now(), identifier)
-            )
-
     def commit_draft(self, identifier: SessionId, message: str) -> CodeCommit | None:
         """把会话工作树里的改动提交到 draft 分支；无改动返回 None。"""
         session = self._require_session(identifier)

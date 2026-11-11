@@ -237,4 +237,3 @@ def render_book(
 
 renderBook = render_book
 renderEmptyBook = render_empty_book
-escapeForScript = escape_for_script

@@ -38,9 +38,6 @@ class ExecLimits:
             raise ValueError("执行限制要求 timeout/output 为正数且 grace 非负")
 
 
-DEFAULT_EXEC_LIMITS = ExecLimits()
-
-
 @dataclass(frozen=True)
 class ExecEvent:
     """执行过程事件，按 seq 有序；kind 限定为 spawn/stdout/stderr/exit/cancel-requested。"""

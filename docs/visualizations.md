@@ -28,7 +28,7 @@ Pi JSONL 对话片段汇总首条用户/助手文本、工具调用与写入工�
 
 缺失或损坏的可选运行数据库、快照、对话记录、清单和控制页不影响导航。显式诊断会出现在 `warnings`、图警告（若存在）以及 HTML 中可展开的警告面板里。`control.db` 缺失/不可读、缺少必需会话，或显式指定的会话/运行不存在，都属于错误。
 
-可独立使用的 API 有 `build_graph`、`build_inputs`、`build_diagram`、`parse_transcript`、`one_line`、`sample_table`、`read_table_stat` 和 `read_db_facts`。各构建器也接受原项目的 camelCase 输入映射。JSON 视图键保持 camelCase。对应的 camelCase API 别名以及带类型的视图/输入模型均已导出。
+可独立使用的 API 有 `build_graph`、`build_inputs`、`build_diagram`、`parse_transcript`、`one_line`、`sample_table`、`read_table_stat` 和 `read_db_facts`。JSON 视图键保持 camelCase（那是数据形状，不是 API 命名）。带类型的视图/输入模型均已导出。
 
 ## SQL map：作者声明，而非 SQL 推断
 
@@ -63,4 +63,4 @@ html = render_html(built)
 
 两级 UI 按原始文件对输入分组，可展开输出表与列，并支持诸如 `index.html#/out/headcount/count` 的链接。未映射的列保持无标注。原始示例声明打包在 `src\vibe_excel\assets\sqlmap\molex.lineage.json`。
 
-SQL map 还导出 `read_database`、`read_csv`、`split_csv_line`、`escape_for_script`、常量与类型模型，以及原项目的 camelCase 别名。两个包都暴露 `run_cli(argv: list[str]) -> int`；控制台入口点使用 `vibe_excel.book.cli:main` 和 `vibe_excel.sqlmap.cli:main`。
+SQL map 还导出 `read_database`、`read_csv`、`split_csv_line`、`escape_for_script`、常量与类型模型。API 一律 snake_case；控制台入口点是 `vibe_excel.book.cli:main` 和 `vibe_excel.sqlmap.cli:main`。

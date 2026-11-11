@@ -5,17 +5,12 @@
 """
 
 from .build import (
-    BuildInput,
     CsvTable,
     DbTable,
     build_lineage,
-    buildLineage,
     read_csv,
     read_database,
-    readCsv,
-    readDatabase,
     split_csv_line,
-    splitCsvLine,
 )
 from .lineage import (
     FILTER_KINDS,
@@ -34,26 +29,13 @@ from .lineage import (
     TableOutput,
     TableSource,
     parse_lineage,
-    parseLineage,
 )
-from .render import escape_for_script, escapeForScript, render_html, renderHtml
-
-
-def run_cli(argv: list[str]) -> int:
-    """把命令行参数转交给 CLI 模块。
-
-    延迟导入，避免只使用校验或渲染 API 时也加载 CLI 依赖。
-    """
-    from .cli import run_cli as run
-
-    return run(argv)
-
+from .render import escape_for_script, render_html
 
 __all__ = [
-    "FILTER_KINDS", "LINEAGE_VERSION", "BuildInput", "BuiltColumnEdge", "BuiltLineage",
+    "FILTER_KINDS", "LINEAGE_VERSION", "BuiltColumnEdge", "BuiltLineage",
     "BuiltSource", "BuiltTable", "ColumnEdge", "ColumnRef", "CsvTable", "DbTable",
     "FilterKind", "LineageCase", "LineageDoc", "RowFilter", "TableInput", "TableOutput",
     "TableSource", "build_lineage", "escape_for_script", "parse_lineage", "read_csv",
-    "read_database", "render_html", "run_cli", "split_csv_line", "buildLineage",
-    "escapeForScript", "parseLineage", "readCsv", "readDatabase", "renderHtml", "splitCsvLine",
+    "read_database", "render_html", "split_csv_line",
 ]

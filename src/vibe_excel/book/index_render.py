@@ -14,7 +14,7 @@ from .projects_edit import MAX_PROJECT_NAME
 from .render import THEME_ICONS, THEME_SCRIPT, _asset, font_face_css
 from .types import ProjectSummary
 
-__all__ = ["render_index", "renderIndex"]
+__all__ = ["render_index"]
 
 _INDEX_STYLE = """
 /* 索引页专属：一列项目卡片。其余全部沿用 app.css 的 token 与组件。 */
@@ -67,10 +67,10 @@ body.ix .fbar{right:12px}
 .ix-newdlg{width:340px;left:50%;top:50%;transform:translate(-50%,-50%)}
 .ix-newdlg .ix-l{display:block;margin-top:9px;color:var(--ink2);font-size:11.5px}
 .ix-newdlg .ix-hint{margin-top:9px;color:var(--muted);font-size:11.5px;line-height:16px}
-.ix-newdlg input,.ix-newdlg select{display:block;width:100%;height:30px;margin-top:4px;padding:0 8px;
+.ix-newdlg input{display:block;width:100%;height:30px;margin-top:4px;padding:0 8px;
   border:1px solid var(--line);border-radius:8px;background:var(--fill);color:var(--ink);
   font:12.5px/1.4 var(--font)}
-.ix-newdlg input:focus,.ix-newdlg select:focus{outline:none;border-color:var(--accent);
+.ix-newdlg input:focus{outline:none;border-color:var(--accent);
   background:var(--panel)}
 .ix-newdlg .ask-f{margin-top:12px}
 """
@@ -484,4 +484,3 @@ def render_index(
 """
 
 
-renderIndex = render_index

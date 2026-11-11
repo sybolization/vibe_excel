@@ -69,11 +69,6 @@ def head_sha(repo: str | Path, ref: str = "HEAD") -> str | None:
     return result.stdout.strip()
 
 
-def current_branch(repo: str | Path) -> str:
-    """返回当前分支名。"""
-    return git(repo, ["rev-parse", "--abbrev-ref", "HEAD"]).stdout.strip()
-
-
 def branch_exists(repo: str | Path, branch: str) -> bool:
     """判断本地分支是否存在；返回码只在 0/1 有意义，其它视为错误。"""
     result = git(

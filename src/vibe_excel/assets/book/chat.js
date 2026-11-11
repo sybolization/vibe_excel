@@ -471,6 +471,18 @@
     };
 
     const handle = (event) => {
+      if (event.type === "start") {
+        /* 后端在回合开始时发一条 start，带着用户的原话。正常路径下这句已经
+           乐观追加过了；重连回放时补上，别让历史里少掉提问。 */
+        const text = String(event.text ?? "");
+        const last = thread.blocks[thread.blocks.length - 1];
+        const has = last !== undefined && last.kind === "user" && last.text === text;
+        if (!has && text !== "" && !thread.blocks.some((b) => b.kind === "user" && b.text === text)) {
+          thread.blocks.unshift({ kind: "user", at: new Date().toISOString(), text });
+          paint();
+        }
+        return;
+      }
       if (event.type === "thinking") {
         thought.text += event.delta ?? "";
         repaint();
@@ -603,11 +615,6 @@
     unread(on = true) {
       state.unread = on;
       paintRail();
-    },
-    open() {
-      state.open = true;
-      applyLayout();
-      paint();
     },
     /* 页面上的动作（移出/撤回）之后让对话区重新读一遍运行态 */
     refresh() {

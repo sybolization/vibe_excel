@@ -321,4 +321,3 @@ def parse_lineage(raw: object) -> LineageDoc:
     }
 
 
-parseLineage = parse_lineage

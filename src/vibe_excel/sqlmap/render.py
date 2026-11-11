@@ -83,5 +83,3 @@ def render_html(built: BuiltLineage) -> str:
 """
 
 
-renderHtml = render_html
-escapeForScript = escape_for_script

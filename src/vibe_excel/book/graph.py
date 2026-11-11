@@ -152,4 +152,3 @@ def build_graph(
     }
 
 
-buildGraph = build_graph

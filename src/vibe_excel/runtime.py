@@ -8,7 +8,6 @@
 
 from __future__ import annotations
 
-import contextlib
 import json
 import logging
 import os
@@ -16,7 +15,7 @@ import shutil
 import socket
 import sqlite3
 import time
-from collections.abc import Callable, Iterator, Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -80,10 +79,6 @@ def session_lock_path(store_root: str | Path, session_id: SessionId) -> Path:
     """会话锁文件的位置；锁建在会话根，覆盖整个会话的写操作。"""
     return workspace_paths(store_root, session_id).root / ".session.lock"
 
-
-def run_directory(store_root: str | Path, session_id: SessionId, run_id: str) -> Path:
-    """某次运行的目录。"""
-    return workspace_paths(store_root, session_id).runs / run_id
 
 
 @dataclass(frozen=True)
@@ -213,15 +208,6 @@ def acquire_lock(path: str | Path, options: AcquireOptions | None = None) -> Ses
             if time.monotonic() >= deadline:
                 raise VibeError(f"会话已被占用: {target}（持有者={info}）") from None
             time.sleep(settings.poll_ms / 1000)
-
-
-@contextlib.contextmanager
-def with_session_lock(
-    store_root: str | Path, session_id: SessionId, options: AcquireOptions | None = None
-) -> Iterator[SessionLock]:
-    """在会话锁保护下执行一个块；异常时同样释放锁。"""
-    with acquire_lock(session_lock_path(store_root, session_id), options) as lock:
-        yield lock
 
 
 def with_lock_sync[T](
@@ -411,16 +397,3 @@ def clean_rerun(options: CleanRunOptions) -> CleanRunResult:
         except VibeError as error:
             logger.error("工作树清理失败: %s", error)
             (artifacts / "worktree-cleanup-error.txt").write_text(str(error) + "\n", encoding="utf-8")
-
-
-def diff_run_files(a: list[Digest], b: list[Digest]) -> dict[str, object]:
-    """比较两组文件摘要，给出仅 A、仅 B、内容不同的路径及是否完全一致。"""
-    left = {item.path: item.sha256 for item in a}
-    right = {item.path: item.sha256 for item in b}
-    only_a = sorted(left.keys() - right.keys())
-    only_b = sorted(right.keys() - left.keys())
-    changed = sorted(name for name in left.keys() & right.keys() if left[name] != right[name])
-    return {
-        "onlyInA": only_a, "onlyInB": only_b, "changed": changed,
-        "identical": not only_a and not only_b and not changed,
-    }

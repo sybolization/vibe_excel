@@ -8,9 +8,9 @@ import csv
 import io
 import sqlite3
 from pathlib import Path
-from typing import NotRequired, TypedDict
+from typing import TypedDict
 
-from ..util import VibeError, now, quote_identifier, readonly_database, require_object, require_text
+from ..util import VibeError, now, quote_identifier, readonly_database, require_text
 from .lineage import BuiltColumnEdge, BuiltLineage, BuiltTable, ColumnRef, parse_lineage
 
 
@@ -28,14 +28,6 @@ class CsvTable(TypedDict):
     name: str
     rows: int
     columns: list[str]
-
-
-class BuildInput(TypedDict):
-    """兼容 camelCase 调用的 build_lineage 入参映射。"""
-
-    doc: object
-    dbPath: str
-    csvDir: NotRequired[str]
 
 
 def read_database(db_path: str | Path) -> dict[str, DbTable]:
@@ -115,13 +107,6 @@ def build_lineage(
     公式仍是作者声明的文本；本 API 不推导也不执行 SQL 血缘。
     输入表必须在库中存在，输出列必须声明完整，否则直接报错。
     """
-    if db_path is None and isinstance(doc, dict) and "dbPath" in doc:
-        options = require_object(doc, "build_lineage 参数")
-        db_path = require_text(options.get("dbPath"), "dbPath")
-        csv_value = options.get("csvDir")
-        if csv_value is not None:
-            csv_dir = require_text(csv_value, "csvDir", allow_empty=True)
-        doc = options.get("doc")
     parsed = parse_lineage(doc)
     if db_path is None:
         raise VibeError("build_lineage 需要 db_path")
@@ -220,7 +205,3 @@ def build_lineage(
     }
 
 
-buildLineage = build_lineage
-readDatabase = read_database
-readCsv = read_csv
-splitCsvLine = split_csv_line

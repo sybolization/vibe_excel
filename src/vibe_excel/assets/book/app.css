@@ -193,11 +193,7 @@ button{font:inherit;color:inherit;background:none;border:0;cursor:pointer}
 .bp-meta{font:11.5px var(--font);font-variant-numeric:tabular-nums;color:var(--ink2);white-space:nowrap;flex:none}
 .bp-bd{flex:1;min-height:0;display:flex;gap:36px;padding:14px 16px;overflow:auto}
 .bp-ft{flex:none;display:flex;align-items:center;gap:8px;height:46px;padding:0 12px;border-top:1px solid var(--line2);background:var(--sunken)}
-.bp-ft .box{flex:1;min-width:0;display:flex;align-items:center;gap:6px;height:30px;padding:0 10px;border-radius:8px;
   border:1px solid var(--glass-line);background:var(--card);overflow:hidden}
-.bp-ft input{flex:1;min-width:80px;border:0;outline:0;background:none;color:var(--ink);font:12.5px var(--font)}
-.bp-ft input::placeholder{color:var(--muted)}
-.bp-hint{margin-right:auto;font-size:11.5px;color:var(--muted)}
 .pane{min-width:0;display:flex;flex-direction:column}
 .pane.grow{flex:1}
 .selh{display:flex;align-items:baseline;gap:10px;min-width:0;margin-bottom:8px}
@@ -213,7 +209,6 @@ button{font:inherit;color:inherit;background:none;border:0;cursor:pointer}
 .link .nm{font-family:var(--font);font-size:12.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .link .x{margin-left:auto;font:11px var(--mono);color:var(--muted);flex:none}
 .links2{display:grid;grid-template-columns:repeat(2,minmax(0,320px));justify-content:start;gap:0 44px}
-.note.mono{font-family:var(--font);font-variant-numeric:tabular-nums;font-size:11.5px}
 
 /* ---------- 缩放 ---------- */
 .fzoom{right:calc(var(--cw,360px) + 12px);bottom:264px;display:flex;align-items:center;gap:2px;height:32px;padding:0 7px;border-radius:16px;background:var(--glass-bar)}
@@ -316,6 +311,8 @@ button{font:inherit;color:inherit;background:none;border:0;cursor:pointer}
 .blk .body{min-width:0}
 
 .stamp{align-self:center;font-size:11px;color:var(--faint);margin:2px 0}
+/* 拖动画布时换成抓取手势：JS 早就在切换 .drag，只是一直没有对应的样式 */
+.cv.drag{cursor:grabbing}
 .tool{border-radius:8px;padding:0}
 /* 正在跑：左边一道很淡的竖线，不加动画。动起来的东西说明它在动，
    但这不是给眼睛看的烟花——内容本身才是。 */
@@ -328,7 +325,6 @@ button{font:inherit;color:inherit;background:none;border:0;cursor:pointer}
 .tool .tb{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--muted)}
 /* 失败只在行尾挂一枚徽标：红点 + 一句原因，不动整行颜色 */
 .chat-stop{background:var(--ink);color:var(--bg)}
-.chat-stop[hidden]{display:none}
 .tool .fail{flex:none;display:inline-flex;align-items:center;gap:5px;padding:1px 7px;border-radius:999px;
   background:var(--raise);color:var(--ink2);font-size:11px;line-height:16px;white-space:nowrap}
 .tool .fail .fd{width:5px;height:5px;border-radius:50%;background:#e5484d;flex:none}
@@ -396,9 +392,7 @@ button{font:inherit;color:inherit;background:none;border:0;cursor:pointer}
 .ask-h{font-weight:600;color:var(--ink);font-size:12.5px}
 .ask-b{margin:3px 0 7px;color:var(--ink);word-break:break-all}
 .ask-n{color:var(--muted);font-size:11.5px;margin-bottom:9px}
-.ask-r{width:100%;box-sizing:border-box;resize:vertical;border:1px solid var(--line2);border-radius:8px;
   padding:6px 8px;background:var(--fill);color:var(--ink);font:12px/1.5 var(--font);min-height:44px}
-.ask-r:focus{outline:none;border-color:var(--accent)}
 .ask-f{display:flex;gap:6px;justify-content:flex-end;margin-top:9px}
 .ask-e{color:var(--amber);font-size:11.5px;margin-top:6px}
 .ask-e:empty{display:none}

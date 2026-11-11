@@ -144,7 +144,6 @@ def _read_yaml(path: Path, where: str) -> object:
         return yaml.safe_load(text)
     except yaml.YAMLError as error:
         fail(f"{where} {path} 不是合法 YAML：{error}")
-    raise AssertionError("unreachable")
 
 
 def parse_manifest(path: str | Path, env: Environment | None = None) -> Manifest:

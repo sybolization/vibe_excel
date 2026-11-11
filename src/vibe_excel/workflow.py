@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import re
 import sqlite3
-import sys
 import time
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
@@ -17,7 +16,6 @@ from pathlib import Path
 
 from vibe_excel.flow import FlowNode, FlowPlan, MaterializeEntry, parse_call
 from vibe_excel.process import ProcessResult
-from vibe_excel.runtime import CleanRunEntry, CleanRunOptions, clean_rerun
 from vibe_excel.util import (
     Digest,
     TableDigest,
@@ -118,42 +116,6 @@ class FlowRoundOptions:
     run_python: Callable[[PythonNodeInput], ProcessResult]
     read_file: Callable[[str], str]
     log: Callable[[str], None] = print
-
-
-class Executor:
-    """把干净重跑包装成 ProcessResult 的默认执行器。"""
-
-    def __init__(
-        self, python: str = sys.executable, timeout_ms: int = 900_000,
-        max_output_bytes: int = 8 * 1024 * 1024, kill_grace_ms: int = 5000,
-    ) -> None:
-        """保存解释器与默认的时长/输出上限；节点级 timeoutMs 会覆盖这里的默认值。"""
-        self.python = python
-        self.timeout_ms = timeout_ms
-        self.max_output_bytes = max_output_bytes
-        self.kill_grace_ms = kill_grace_ms
-
-    def interpreter(self) -> str:
-        """返回将要使用的 Python 解释器路径。"""
-        return self.python
-
-    def run(
-        self, *, repo_path: str | Path, commit: str, run_root: str | Path, entry: str | Path,
-        args: list[str], as_of: str, timeout_ms: int | None = None,
-    ) -> ProcessResult:
-        """在指定提交的独立工作树上干净重跑入口脚本，返回纯进程结果。"""
-        result = clean_rerun(
-            CleanRunOptions(
-                repo_path, commit, run_root, CleanRunEntry(self.python, [str(entry), *args]),
-                timeout_ms=self.timeout_ms if timeout_ms is None else timeout_ms,
-                as_of_date=as_of, max_output_bytes=self.max_output_bytes,
-                kill_grace_ms=self.kill_grace_ms,
-            )
-        )
-        return ProcessResult(
-            result.exit_code, result.timed_out, result.stdout, result.stderr, result.elapsed_ms,
-            result.cancelled, result.truncated,
-        )
 
 
 def fill_kwargs(values: Mapping[str, str], variables: Mapping[str, str]) -> dict[str, str]:

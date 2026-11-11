@@ -632,22 +632,7 @@
   }
 
   /* ---------- 选中与聚焦 ---------- */
-  function closure(fileName) {
-    const start = `f:${fileName}`;
-    const lit = new Set([start]);
-    const stack = [start];
-    while (stack.length > 0) {
-      const id = stack.pop();
-      for (const next of downs.get(id) ?? []) {
-        if (!next || lit.has(next.id)) continue;
-        lit.add(next.id);
-        stack.push(next.id);
-      }
-    }
-    return lit;
-  }
-
-  /* 点一个节点，点亮的是它自己那条链：上下游都算，其余退到背景。
+  /* 点一个节点，点亮的是它自己那条链  /* 点一个节点，点亮的是它自己那条链：上下游都算，其余退到背景。
      之前这里传的是 null，等于什么都没高亮——画布上那条蓝色运行路径永远不变。 */
   function chainOf(id) {
     const lit = new Set([id]);

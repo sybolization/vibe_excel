@@ -119,8 +119,6 @@ def parse_transcript(
     }
 
 
-oneLine = one_line
-parseTranscript = parse_transcript
 
 
 _CLIP_TEXT = 4000
@@ -285,5 +283,3 @@ def parse_conversation(
     }
 
 
-parseConversation = parse_conversation
-conversationTitle = conversation_title

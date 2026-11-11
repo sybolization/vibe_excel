@@ -150,10 +150,4 @@ def load_flow_at_commit(
     return replace(spec, entry=code.entry, nodes=code.nodes, warnings=code.warnings)
 
 
-def nodes_of_code_flow(flow: CodeFlow) -> list[FlowNode]:
-    """代码解析结果已经直接持有 FlowNode；保留函数名与 TS 的 nodesOfCodeFlow 对齐。"""
 
-    return list(flow.nodes)
-
-
-nodesOfCodeFlow = nodes_of_code_flow  # 与 TypeScript 侧的驼峰命名保持对齐

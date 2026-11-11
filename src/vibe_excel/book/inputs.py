@@ -306,6 +306,5 @@ def build_inputs(
     }
 
 
-buildInputs = build_inputs
 
-__all__ = ["BatchView", "BuildInputsInput", "DbTableFact", "RunRecord", "SourceRef", "build_inputs", "buildInputs"]
+__all__ = ["BatchView", "BuildInputsInput", "DbTableFact", "RunRecord", "SourceRef", "build_inputs"]

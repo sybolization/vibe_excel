@@ -23,17 +23,6 @@ ServiceName = Literal[
     "store", "workspace", "exec", "agent", "telemetry", "commands", "sessions"
 ]
 
-SERVICE_NAMES: tuple[ServiceName, ...] = (
-    "store",
-    "workspace",
-    "exec",
-    "agent",
-    "telemetry",
-    "commands",
-    "sessions",
-)
-
-
 @dataclass(frozen=True, slots=True)
 class CommandContext:
     """一条命令拿到的参数与输出通道。
@@ -296,28 +285,6 @@ class OptimizeResult:
     proposal_path: str
     proposals: list[object]
     commit: str | None
-
-
-class SessionsService(Protocol):
-    """会话编排服务。
-
-    `author` / `run_flow` / `optimize`（apply 模式）会走会话锁；`setup` / `status` /
-    `publish` 与 `optimize` 的 review 模式不走。所有方法都假设 `setup` 至少跑过一次。
-    """
-
-    def setup(self) -> SetupResult: ...
-
-    def author(self, prompt_file: str, label: str, timeout_ms: int | None = None) -> AuthorResult: ...
-
-    def run_flow(self, as_of: str | None = None) -> RunResult: ...
-
-    def publish(self, run_id: str | None = None) -> dict[str, object]: ...
-
-    def optimize(
-        self, apply_id: str | None = None, source: str | None = None, timeout_ms: int | None = None
-    ) -> OptimizeResult: ...
-
-    def status(self) -> StatusView: ...
 
 
 ConfigValidator = Callable[[object], object]

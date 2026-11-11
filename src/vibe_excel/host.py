@@ -29,10 +29,6 @@ from vibe_excel.manifest import (
 )
 from vibe_excel.util import VibeError
 
-FIBER_STATES: tuple[str, ...] = (
-    "PENDING", "LOADING", "ACTIVE", "FAILED", "DISPOSED", "UNLOADING"
-)
-
 
 @dataclass(frozen=True, slots=True)
 class PluginReport:
