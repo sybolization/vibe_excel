@@ -78,9 +78,12 @@
   const byId = new Map(N.map((n) => [n.id, n]));
   const idx = new Map(N.map((n, i) => [n.id, i]));
   const downs = new Map();
+  const ups = new Map();
   for (const e of E) {
     if (!downs.has(e.from)) downs.set(e.from, []);
     downs.get(e.from).push(byId.get(e.to));
+    if (!ups.has(e.to)) ups.set(e.to, []);
+    ups.get(e.to).push(e.from);
   }
 
   /* 四种剪影，不再是一个宽度乘四份。文件竖着（纸是竖的）、sheet 窄（一页夹签）、
@@ -317,7 +320,7 @@
     const b = L.pos.get(e.to);
     if (a === undefined || b === undefined) return "";
     const cls = e.run ? "run" : e.kind === "loose" ? "loose" : "";
-    return `<path d="${edgePath(a, b)}" data-a="${esc(e.from)}" data-b="${esc(e.to)}"${cls === "" ? "" : ` class="${cls}"`}/>`;
+    return `<path d="${edgePath(a, b)}" data-a="${idx.get(e.from)}" data-b="${idx.get(e.to)}"${cls === "" ? "" : ` class="${cls}"`}/>`;
   }).join("");
   layer.innerHTML = `<svg width="${Math.max(1, L.width)}" height="${Math.max(1, L.height)}">${paths}</svg>${N.map(nodeHtml).join("")}`;
   cv.appendChild(layer);
@@ -390,7 +393,14 @@
     drag = null;
     cv.classList.remove("drag");
     if (pending === null || pending.moved) return;
-    if (pending.hit !== null) selectNode(N[Number(pending.hit.getAttribute("data-i"))]);
+    if (pending.hit !== null) {
+      selectNode(N[Number(pending.hit.getAttribute("data-i"))]);
+      return;
+    }
+    // 点空白处取消高亮，整张图回到常态
+    selNode.id = null;
+    applyLit(null, null);
+    paintBar();
   });
 
   /* ---------- 顶栏 ---------- */
@@ -424,7 +434,11 @@
   const staleFiles = () => {
     if (!LIVE) return new Set();
     const alive = new Set(groundFiles().filter((f) => !f.missing).map((f) => f.name));
-    return new Set(batchFiles().filter((f) => f.inBatch && !alive.has(f.name)).map((f) => f.name));
+    const batch = batchFiles().filter((f) => f.inBatch);
+    // 目录里一个都不认得 → 是指错了 ground-truth，不是「五个文件全被移出」。
+    // 宁可什么都不标灰，也不能把所有链路判成失效。
+    if (batch.length > 0 && !batch.some((f) => alive.has(f.name))) return new Set();
+    return new Set(batch.filter((f) => !alive.has(f.name)).map((f) => f.name));
   };
   const trayRows = () => {
     const stale = staleFiles();
@@ -622,6 +636,50 @@
     return lit;
   }
 
+  /* 点一个节点，点亮的是它自己那条链：上下游都算，其余退到背景。
+     之前这里传的是 null，等于什么都没高亮——画布上那条蓝色运行路径永远不变。 */
+  function chainOf(id) {
+    const lit = new Set([id]);
+    const down = [id];
+    while (down.length > 0) {
+      for (const next of downs.get(down.pop()) ?? []) {
+        if (next === undefined || next === null || lit.has(next.id)) continue;
+        lit.add(next.id);
+        down.push(next.id);
+      }
+    }
+    const up = [id];
+    const seen = new Set([id]);
+    while (up.length > 0) {
+      for (const prev of ups.get(up.pop()) ?? []) {
+        if (prev === undefined || prev === null || seen.has(prev)) continue;
+        seen.add(prev);
+        lit.add(prev);
+        up.push(prev);
+      }
+    }
+    return lit;
+  }
+
+  function applyLit(lit, selectedId) {
+    // 边记的是节点下标而不是 id：id 里带 \u0000，塞进 HTML 属性后会被解析成 U+FFFD，
+    // 读回来和内存里的 id 永远对不上——这就是「点谁都是同一条路径」的根因。
+    const litIdx = lit === null ? null : new Set([...lit].map((id) => idx.get(id)));
+    for (const el of layer.querySelectorAll(".nd")) {
+      const node = N[Number(el.getAttribute("data-i"))];
+      el.classList.toggle("dim", lit !== null && !lit.has(node.id));
+      el.classList.toggle("sel", node !== undefined && node.id === selectedId);
+    }
+    for (const el of layer.querySelectorAll("path")) {
+      const a = Number(el.getAttribute("data-a"));
+      const b = Number(el.getAttribute("data-b"));
+      const litEdge = litIdx === null || (litIdx.has(a) && litIdx.has(b));
+      el.style.opacity = litEdge ? "1" : "0.14";
+      // 选中的链用一条更实的线画出来：不然「蓝的那条」和「我点的这条」会被看成两回事
+      el.classList.toggle("hot", lit !== null && litEdge);
+    }
+  }
+
   function selectNode(n) {
     if (n === undefined) return;
     selNode.id = n.id;
@@ -630,13 +688,7 @@
       const index = files.findIndex((f) => `f:${f.name}` === n.id);
       if (index >= 0) sel.value = index;
     }
-    const lit = null;
-    for (const el of layer.querySelectorAll(".nd")) {
-      const node = N[Number(el.getAttribute("data-i"))];
-      el.classList.toggle("dim", lit !== null && !lit.has(node.id));
-      el.classList.toggle("sel", node.id === n.id);
-    }
-    for (const el of layer.querySelectorAll("path")) el.style.opacity = "1";
+    applyLit(chainOf(n.id), n.id);
     for (const el of tray.querySelectorAll(".row")) {
       const f = files[Number(el.getAttribute("data-f"))];
       el.classList.toggle("on", f !== undefined && (n.kind === "file" ? `f:${f.name}` === n.id : f.direct.concat(f.derived).some((r) => r.name === n.label)));
@@ -650,17 +702,9 @@
     const f = files[value];
     const nodeId = f === undefined ? null : `f:${f.name}`;
     selNode.id = nodeId;
-    const lit = focus && nodeId !== null ? closure(f.name) : null;
-    for (const el of layer.querySelectorAll(".nd")) {
-      const n = N[Number(el.getAttribute("data-i"))];
-      el.classList.toggle("dim", lit !== null && !lit.has(n.id));
-      el.classList.toggle("sel", nodeId !== null && n.id === nodeId);
-    }
-    for (const el of layer.querySelectorAll("path")) {
-      const a = el.getAttribute("data-a");
-      const b = el.getAttribute("data-b");
-      el.style.opacity = lit === null ? "1" : lit.has(a) && lit.has(b) ? "1" : "0.18";
-    }
+    // 点文件也走同一套上下沿：文件和它喂出来的每一张表都算同一条链
+    const lit = focus && nodeId !== null ? chainOf(nodeId) : null;
+    applyLit(lit, nodeId);
     for (const el of tray.querySelectorAll(".row")) {
       el.classList.toggle("on", Number(el.getAttribute("data-f")) === value);
     }
@@ -769,6 +813,17 @@ if (location.search.includes("selftest")) {
     out.push(`computeSel=${computeNode === null ? "miss" : bar.textContent.includes(show("clean_positions"))}`);
     out.push(`hasReads=${bar.textContent.includes("读")}`);
     out.push(`paneKind=${bar.querySelector(".bp-bd").textContent.trim().slice(0, 18)}`);
+
+    /* 选中必须真的改变高亮。边原本用节点 id 定位，而 id 里的 \u0000 写进 HTML 属性
+       会被解析成 U+FFFD，读回来永远匹配不上——于是点谁都是同一条蓝线。 */
+    const hotOf = () => layer.querySelectorAll("path.hot").length;
+    const dimOf = () => layer.querySelectorAll(".nd.dim").length;
+    clickNode(N.find((n) => n.kind === "table" && n.label === "site_board"));
+    const firstHl = `${dimOf()}/${hotOf()}`;
+    clickNode(N.find((n) => n.kind === "table" && n.label === "population"));
+    const secondHl = `${dimOf()}/${hotOf()}`;
+    out.push(`hl=${firstHl}->${secondHl}`);
+    out.push(`hlChanged=${firstHl !== secondHl && hotOf() > 0}`);
 
     /* 对话区：收起 / 展开 / 列表 / 拖宽 */
     const st = () => window.__CHATSTATE();
@@ -1128,5 +1183,10 @@ if (location.search.includes("selftest")) {
   paintStale();
   const start = files.findIndex((f) => f.inBatch);
   select(start < 0 ? 0 : start, q.get("focus") === "1");
+  const wanted = q.get("node");
+  if (wanted !== null) {
+    const picked = N.find((n) => n.id === wanted);
+    if (picked !== undefined) selectNode(picked);
+  }
   window.addEventListener("resize", fit);
 })();

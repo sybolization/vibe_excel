@@ -68,6 +68,8 @@ button{font:inherit;color:inherit;background:none;border:0;cursor:pointer}
 .cvv path{fill:none;stroke:var(--edge);stroke-width:1.2}
 .cvv path.run{stroke:var(--accent);stroke-width:1.8}
 .cvv path.loose{stroke-dasharray:2 3}
+/* 选中链路上的边：比常态实、比运行色更深，一眼看出"这是我点的这条" */
+.cvv path.hot{stroke:var(--accent);stroke-width:2.2}
 
 /* —— 画布上的颜色只有两个职责，一个色不许兼两个 ——
    墨（--ink）：这一类东西是什么。它出现的地方只有两处——字，和机器那颗点。
