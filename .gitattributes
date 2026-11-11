@@ -1,9 +1,0 @@
-# 统一换行，保证「干净重跑」时产物不受编辑器差异影响（指南 §6.4）
-* text=auto eol=lf
-*.ps1 text eol=crlf
-*.cmd text eol=crlf
-*.bat text eol=crlf
-
-# 二进制表格不参与换行归一（real-data/jinny 下的真实输入表为例外放行，见 .gitignore）
-*.xlsx binary
-*.xls binary

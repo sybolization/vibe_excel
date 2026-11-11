@@ -2,7 +2,7 @@
 
 这个独立、仅依赖标准库的编码器把已有的运行目录转换为可评估的案例。它不解析 Excel，也不在运行时调用 Node、TypeScript 或原项目。
 
-在 `python-replica` 目录下，使用由 uv 管理的环境：
+在仓库根目录（本分支就是 Python 版根目录）下，使用由 uv 管理的环境：
 
 ```powershell
 uv run vibe-encode claims add --file claims.jsonl --id c1 --kind alias `

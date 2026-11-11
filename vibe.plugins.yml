@@ -1,60 +1,40 @@
-# Vibe Excel 的插件清单（形状照抄 DSH 的 cordis.patch.yml）
-#
-# 一行一个插件，`id` 是行的身份，`name` 是模块说明符（相对本文件或包名）。
-# 启动顺序**不**由这里的行序决定，而由服务依赖决定（inject / provide）。
-# 想临时关掉一个插件：给它加 `disabled: true`，或者写一个补丁层覆盖它。
-#
-# 插件自己的 config 全部由各插件的标准 schema 校验；校验不过会在加载阶段就报错，
-# 不会「先跑起来再悄悄用默认值」。
-
 plugins:
-  # —— 宿主能力 ——
   - id: commands
-    name: ./packages/harness/src/plugins/commands.ts
-
+    name: vibe_excel.plugins:commands
   - id: telemetry
-    name: ./packages/harness/src/plugins/telemetry.ts
+    name: vibe_excel.plugins:telemetry
     config:
-      # 长任务的可观测性：事件逐条回显（静默即缺陷）
       echo: true
-
   - id: store
-    name: ./packages/harness/src/plugins/store.ts
+    name: vibe_excel.plugins:store
     config:
-      storeRoot: '${VIBE_EXCEL_STORE:-../vibe_excel-store}'
-
+      storeRoot: '${VIBE_EXCEL_STORE:-.store}'
   - id: workspace
-    name: ./packages/harness/src/plugins/workspace.ts
-
+    name: vibe_excel.plugins:workspace
   - id: exec
-    name: ./packages/harness/src/plugins/exec.ts
+    name: vibe_excel.plugins:exec_plugin
     config:
-      python: '${VIBE_EXCEL_PYTHON:-runtime-env/.venv/Scripts/python.exe}'
+      python: '${VIBE_EXCEL_PYTHON:-}'
       timeoutMs: 900000
-
   - id: agent-pi
-    name: ./packages/harness/src/plugins/agent-pi.ts
+    name: vibe_excel.plugins:agent_pi
     config:
+      cli: '${VIBE_EXCEL_PI:-}'
       provider: '${VIBE_EXCEL_PROVIDER:-opencode-go}'
       model: '${VIBE_EXCEL_MODEL:-deepseek-v4.1-flash}'
       apiKeyEnv: OPENCODE_API_KEY
       timeoutMs: 1500000
-
-  # —— 业务插件 ——
-  # 业务流程不再由插件声明阶段：它写在程序仓库的 flow.json 里（物化 + 节点 + 表边），
-  # 跟着代码一起版本化。这个清单里不再需要「阶段包」这种行。
-
-  # —— 编排 ——
+      askTimeoutMs: 300000
   - id: sessions
-    name: ./packages/harness/src/plugins/sessions.ts
+    name: vibe_excel.plugins:sessions
     config:
-      program: molex-prep
-      asOf: '${VIBE_EXCEL_AS_OF:-2026-10-23}'
+      program: demo-sales
+      dbFile: hr.db
+      asOf: '${VIBE_EXCEL_AS_OF:-2026-01-01}'
+      flowPath: flow.json
+      outDir: out
+      askEnabled: true
       inputs:
-        dir: '${VIBE_EXCEL_GROUND_TRUTH:-ground_true_excel/wenxin}'
+        dir: '${VIBE_EXCEL_GROUND_TRUTH:-}'
         files:
-          - 所有员工_202610231434.XLS
-          - Position+-+Export+To+CSV_2026_10_20.xlsx
-          - 可用岗位表_2026-10-22.xlsx
-          - New Hire_202610231439.XLS
-          - Re Hire_202610231438.XLS
+          - orders.xlsx

@@ -1,47 +1,17 @@
-# 依赖与构建产物
-node_modules/
-dist/
-*.tsbuildinfo
-
-# 生成的账页（随时可由 pnpm book 重算）
-/out/
-
-# Python 虚拟环境（由 uv 生成，不提交）
 .venv/
+.store/
+out/
+dist/
 __pycache__/
 *.py[cod]
-
-# 凭证
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.egg-info/
 .env
-.env.*
-!.env.example
-
-# 数据与制品不进代码仓库（指南 §6.1）
-# 原始 Excel、SQLite 数据库、输出文件、个人信息标注、trace 一律放在
-# 仓库外的制品存储（默认 <repo>/../vibe_excel-store，见 ADR-0001）。
-.store/
-inputs/
-sessions/
-artifacts/
-traces/
-data-revisions/
-spikes/*/out/
-# 侦察脚本生成的中间事实（随时可由脚本重算）
-spikes/*/tools/*.json
+tools/pi/node_modules/
 *.db
-*.db-journal
 *.db-wal
 *.db-shm
-
-# 真实业务数据（含个人信息）留在本地，不进代码仓库。
-ground_true_excel/
-
-# 合成数据一律由代码生成，不提交二进制表格。
-# 若将来确有需要提交夹具，在此目录下加 ! 例外。
 *.xlsx
 *.xls
-
-# 例外（用户明确要求）：jinny 的 MFG 招聘真实输入表留档在本私有仓库，
-# 源目录 C:\project\better-operate-doc-jinny\original-data，见 real-data/jinny/SOURCE.md。
-# 其余 *.xlsx 仍然忽略；这条只放行这一个目录。
-!real-data/jinny/*.xlsx

@@ -1,6 +1,6 @@
 # 离线账本与 SQL 血缘导出
 
-在 `python-replica` 目录下执行 `uv sync` 后运行以下命令。无需 Node、SQL 解析器、浏览器服务或网络连接。
+在仓库根目录执行 `uv sync` 后运行以下命令。无需 Node、SQL 解析器、浏览器服务或网络连接。
 
 ```powershell
 uv run python -m vibe_excel.book build --store C:\data\store --out .\exports\book.html

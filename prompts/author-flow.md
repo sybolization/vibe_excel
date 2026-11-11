@@ -1,54 +1,63 @@
-# 任务：把一段业务描述写成一条可运行的工作流
-
-你在这个项目的**程序工作区**（一个 git worktree）里工作。可用工具只有 bash / read / write / edit，
-外加 `ask_user`（向人提问）。**不要执行任何 git 命令**，提交由编排器负责。
-
-产出物只有两样：`flow.json`，和它引用的 Python 文件。没有别的。
+# 任务：把一段业务描述写成一条可运行的 Excel 工作流
 
 {{WORKSPACE}}
 
-上面这张表是**本次运行开始前探测出来的**，不是配置。里面的绝对路径直接用，不要再去找；
-标了「不存在」的项目按「缺的东西」里的办法处理，不要假装它存在。
+你在这个项目的程序工作区 `{{CODE}}` 里工作。可用工具只有 bash / read / write / edit，
+外加 `ask_user`（向人提问）。不要执行任何 git 命令，提交由 Python 侧的编排器负责。
+
+运行参数：
+
+- 只用解释器 `{{PYTHON}}`；系统里的 `python` 是 0 字节的商店壳，不要用。
+- 输入文件在 `{{INPUTS}}`，只读，不要改里面任何文件。
+- 业务数据库是 `{{DB}}`，输出文件写到 `{{OUT}}`。
+- 业务日期钉死为 `{{ASOF}}`，不要读系统时间。
+- 工作流声明写在 `{{FLOW}}`。
+
+产出物是 `{{FLOW}}` 和它引用的 Python 文件；可复用的业务语义追加到 `semantics/claims.jsonl`。没有别的。
+
+遇到只能由人决定的口径问题，调用 `ask_user` 问；一次只问一件事。能自己从数据或代码里查清的，不许拿去问人。
+把未确认的假设如实记录，不要假装用户已经同意。
 
 ## 硬约束
 
-- Python 只用上面表里那个绝对路径（系统里的 `python` 是 0 字节的商店壳）：`{{PYTHON}}`
-- 输入批次目录是**只读**的，不要改里面任何文件。
-- 业务日期钉死为 `{{ASOF}}`，**不要读系统时间**。
-- 工作流声明写在：`{{FLOW}}`。
+- Python 只用 `{{PYTHON}}`。
+- `{{INPUTS}}` 里的文件只读。
+- 业务日期钉死为 `{{ASOF}}`，不要读系统时间。
+- 工作流声明写在 `{{FLOW}}`。
 
 ## 契约一：代码就是流程
 
-平台**从你的代码里解析出流程**，不会读你手写的节点列表。所以代码必须写成下面这个形状，
+平台从你的代码里解析出流程，不会读你手写的节点列表。所以代码必须写成下面这个形状，
 不然解析出来的图是错的——而错的图不会被拦住，它会安静地少一个节点。
 
-五条规则：
+规则：
 
-1. **`main` 是唯一入口，必须线性**：一行一次调用，不写 `if` / `for` / `try`，不做动态分发。
-   `for f in [a, b]: f()` 解析不出顺序，那是错的。
-2. **签名上的 `"t:表名"` 说明这个参数或返回值承载哪张表。**
+1. `main` 是唯一入口，必须线性：一行一次调用，不写 `if` / `for` / `while` / `try`，不做动态分发，
+   也不在 `main` 里定义函数。`for f in [a, b]: f()` 解析不出顺序，那是错的。
+2. 签名上的 `"t:表名"` 说明这个参数或返回值承载哪张表，必须是字符串字面量，禁止 `f"t:{x}"` 这种拼出来的。
    `def clean_employees(db, raw: "t:raw_employees") -> "t:employees"` 读作：吃一张 `raw_employees`，产出一张 `employees`。
-3. **每个函数体第一句是 docstring**，一句话说清它算出什么。这句话就是流程图上的节点标题。
-4. **`def` 上一行写 `# name：中文名`**，这是节点在界面上的名字。函数名是英文标识符，
+3. 每个函数体第一句是 docstring，一句话说清它算出什么。这句话就是流程图上的节点标题。
+4. `def` 上一行写 `# name：中文名`，这是节点在界面上的名字。函数名是英文标识符，
    给人看的是这一行——`# name：清洗岗位` 写在 `def clean_positions(` 的上一行，
    中间不留空行、不留注释块。名字别超过 8 个字，它是标签不是句子。
-5. **函数体内部的块也可以写 `"""…"""`**：`if` / `for` / `while` 的第一句写一句人话，就是那个块的说明。
-   裸语句前面**可以**写（不强制），写了就当这条语句的说明，不写也能解析。
-6. **表名必须是字面量**，禁止 `f"t:{x}"` 这种拼出来的。
+5. 函数体内部的块也可以写 `"""…"""`：`if` / `for` / `while` 的第一句写一句人话，就是那个块的说明。
+   裸语句前面可以写（不强制），写了就当这条语句的说明，不写也能解析。
+6. 不要折叠节点：禁止跨文件调用、装饰器、同一个函数在 `main` 里被调用两次、位置限定参数（`/`）、
+   `async def`、动态分发，以及 `main` 里的控制流——这些都会让节点在图里消失或错位。
 
 ### 输入表由平台递给你，写表是你自己的事
 
-标了 `"t:表名"` 的参数，**平台会把那张表读成 DataFrame 递给你**。所以节点里不要再去
+标了 `"t:表名"` 的参数，平台会把那张表读成 DataFrame 递给你。所以节点里不要再去
 `read_sql` 自己声明过的表——声明了就是你的输入，重复查一遍只会让图和数据对不上。
 
 写是反过来的：节点自己开连接、自己 `to_sql` 写它的产出表（平台据此核对「声明的写表真的变了」）。
 返回值内容随便：返回写进去的 DataFrame 方便你单跑对照，返回计数也行，平台只认签名上的标注。
 
-固定入参只有四个：`db`、`as_of`、`inputs`、`out`，不用标注，平台按名字递。
+固定入参只有四个：`db`、`inputs`、`out`、`as_of`，不用标注，平台按名字递。
 
 ## 一个完整的例子（照这个写）
 
-`flow.json`：
+`{{FLOW}}`：
 
 ```json
 {
@@ -81,7 +90,7 @@ import sqlite3
 import pandas as pd
 
 
-def main(db, as_of: str = "2026-10-23"):
+def main(db, inputs, out, as_of: str = "2026-10-23"):
     """把花名册和可用岗位对成一张 match_result。"""
     conn = sqlite3.connect(db)
     raw_employees = pd.read_sql("SELECT * FROM raw_employees", conn)
@@ -119,6 +128,7 @@ def clean_employees(db, raw: "t:raw_employees") -> "t:employees":
     return df
 
 
+# name：清洗岗位
 def clean_positions(db, raw: "t:raw_positions") -> "t:available_positions":
     """清洗岗位表：转成一行一个岗位的长表，补上有效期。"""
     df = raw.copy()
@@ -131,6 +141,7 @@ def clean_positions(db, raw: "t:raw_positions") -> "t:available_positions":
     return df
 
 
+# name：匹配岗位
 def match_available(db, employees: "t:employees", positions: "t:available_positions", as_of: str) -> "t:match_result":
     """按岗位号把人和岗位对起来，带上业务日期。"""
     merged = employees.merge(positions, on="position_id", how="inner", suffixes=("_emp", "_pos"))
@@ -154,7 +165,7 @@ def match_available(db, employees: "t:employees", positions: "t:available_positi
 
 
 if __name__ == "__main__":
-    main("hr.db")
+    main("hr.db", {}, ".", "2026-10-23")
 ```
 
 这段代码 `python pipeline.py` 能直接跑，不 import 平台的任何东西——这是它必须保持的性质。
@@ -196,9 +207,11 @@ if __name__ == "__main__":
 `flow.json` 里**不写节点**，也不写边：节点从 `main` 读，边从 `"t:"` 标注读。
 主文件默认叫 `pipeline.py`；叫别的名字就在 `flow.json` 里写 `"entry": "你的文件.py"`。
 
+可复用的业务语义写到 `semantics/claims.jsonl`，只追加，不修改历史记录。
+
 ## 契约三：可重复性（会被检查）
 
-一次运行会**把整条流跑两遍**，比较声明的产出。所以：
+一次运行会**把整条流跑两遍**，比较声明的产出。两边都是空产出，不算验证通过。所以：
 
 - 不许写系统时间、随机数、`uuid`、自增且不稳定的 id、网络时间；
 - 不许依赖字典/集合的遍历顺序或文件系统的返回顺序；
@@ -226,6 +239,6 @@ if __name__ == "__main__":
 
 ## 不要做的事
 
-- 不要执行 git 命令；不要改输入批次里的文件；不要访问网络；不要把凭证写进代码。
+- 不要执行 git 命令；不要改 `{{INPUTS}}` 里的文件；不要访问网络；不要把凭证写进代码。
 - 不要写 `import_hr.py` / `analyze.py` 这种「一个大脚本包打天下」的东西——按「表 → 表」拆成函数。
 - 不要在 `main` 里写控制流；需要分支就写进函数体。
