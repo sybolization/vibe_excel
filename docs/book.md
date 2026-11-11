@@ -140,9 +140,14 @@ python -m vibe_excel.book serve --store <store> --port 8731 --open
 会话文件的位置是 `sessions/<session-id>/sessions/*.jsonl`，与 `collect_book` 读的是同一处。
 续写哪一段：带 `conversationId` 就续它，不带就取最近一段；只有按「新建对话」再发才会另起。
 
-后端走 OpenAI 兼容的 `/chat/completions`，由 `VIBE_EXCEL_CHAT_BASE_URL` /
-`VIBE_EXCEL_CHAT_MODEL` / `VIBE_EXCEL_CHAT_KEY_ENV` 决定。没有可用后端时如实报错，
-不伪造回复——比让人以为说上了话更接近事实。
+后端有两个：
+
+- `pi`（默认）：把对话摊成一段文本交给 `pi -p --no-session --no-tools --provider … --model …`，
+  鉴权、网关、Cloudflare 那一层都由 pi 负责——和 DSH 自己用的是同一条路。key 走 `OPENCODE_API_KEY`
+- `http`：直连 OpenAI 兼容的 `/chat/completions`（本机网关不需要 key）
+
+prompt 里会带上这个项目的事实：输入文件、每一步读写了哪些表、结果表。不带的话模型只能说
+「我看不到这个项目」。没有可用后端时如实报错，不伪造回复——比让人以为说上了话更接近事实。
 
 ## 代码在哪
 

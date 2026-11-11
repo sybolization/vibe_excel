@@ -14,6 +14,9 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
+import subprocess
+import sys
 import urllib.error
 import urllib.request
 from collections.abc import Sequence
@@ -25,19 +28,55 @@ from typing import Any
 from ..util import VibeError
 
 DEFAULT_BASE_URL = "http://127.0.0.1:23100/v1"
-DEFAULT_MODEL = "gpt-6.1-sol"
+DEFAULT_MODEL = "deepseek-v4.1-flash"
+DEFAULT_PROVIDER = "opencode-go"
 DEFAULT_KEY_ENV = "OPENCODE_API_KEY"
 DEFAULT_TIMEOUT_MS = 120_000
 
 
+def find_pi_cli() -> Path | None:
+    """找 pi 的 CLI 入口：显式配置优先，其次 npm 全局装法。"""
+    configured = os.environ.get("VIBE_EXCEL_PI", "").strip()
+    if configured:
+        candidate = Path(configured).expanduser()
+        return candidate if candidate.is_file() else None
+    found = shutil.which("pi")
+    if found:
+        path = Path(found)
+        # npm 的 shim 是 .ps1/.cmd，真正能 exec 的是同目录 node_modules 里的 cli.js
+        for name in ("node_modules/@earendil-works/pi-coding-agent/dist/bundle/cli.js",):
+            sibling = path.parent / name
+            if sibling.is_file():
+                return sibling
+        if path.suffix.lower() in (".js", ".mjs", ".exe"):
+            return path
+    return None
+
+
+def _pi_command(cli: Path) -> list[str]:
+    suffix = cli.suffix.lower()
+    if suffix in (".js", ".mjs"):
+        return ["node", str(cli)]
+    if suffix == ".py":
+        return [sys.executable, str(cli)]
+    if suffix == ".ps1":
+        return ["pwsh", "-NoProfile", "-File", str(cli)]
+    if suffix in (".cmd", ".bat"):
+        return ["cmd", "/c", str(cli)]
+    return [str(cli)]
+
+
 @dataclass(frozen=True)
 class ChatConfig:
-    """对话后端的位置与凭据来源。"""
+    """对话后端的位置、模型与凭据来源。"""
 
-    base_url: str
+    backend: str  # pi | http
+    provider: str
     model: str
+    base_url: str
     key_env: str
     timeout_ms: int
+    cli: str
 
     @classmethod
     def from_env(cls) -> ChatConfig:
@@ -50,11 +89,18 @@ class ChatConfig:
             timeout = int(raw_timeout) if raw_timeout else DEFAULT_TIMEOUT_MS
         except ValueError as error:
             raise VibeError(f"VIBE_EXCEL_CHAT_TIMEOUT_MS 必须是整数：{raw_timeout}") from error
+        found = find_pi_cli()
+        backend = read("VIBE_EXCEL_CHAT_BACKEND", "pi" if found is not None else "http")
+        if backend not in ("pi", "http"):
+            raise VibeError(f"VIBE_EXCEL_CHAT_BACKEND 只能是 pi 或 http：{backend}")
         return cls(
+            backend=backend,
+            provider=read("VIBE_EXCEL_CHAT_PROVIDER", read("VIBE_EXCEL_PROVIDER", DEFAULT_PROVIDER)),
+            model=read("VIBE_EXCEL_CHAT_MODEL", read("VIBE_EXCEL_MODEL", DEFAULT_MODEL)),
             base_url=read("VIBE_EXCEL_CHAT_BASE_URL", DEFAULT_BASE_URL).rstrip("/"),
-            model=read("VIBE_EXCEL_CHAT_MODEL", DEFAULT_MODEL),
             key_env=read("VIBE_EXCEL_CHAT_KEY_ENV", DEFAULT_KEY_ENV),
             timeout_ms=timeout,
+            cli="" if found is None else str(found),
         )
 
     @property
@@ -67,6 +113,12 @@ class ChatConfig:
 
 def probe(config: ChatConfig) -> tuple[bool, str]:
     """能不能真的问一句；不能就说清楚缺什么。"""
+    if config.backend == "pi":
+        if not config.cli:
+            return False, "找不到 pi CLI：设置 VIBE_EXCEL_PI 指向 pi 的 cli.js"
+        if not os.environ.get(config.key_env, "").strip():
+            return False, f"pi 需要环境变量 {config.key_env}（模型网关的 API key）"
+        return True, ""
     if not config.is_local() and not os.environ.get(config.key_env, "").strip():
         return (
             False,
@@ -155,13 +207,31 @@ def read_messages(path: Path, *, limit: int = 12) -> list[dict[str, str]]:
     return messages[-limit:]
 
 
-def system_prompt(program: str, events: Sequence[dict[str, Any]]) -> str:
+def system_prompt(
+    program: str,
+    events: Sequence[dict[str, Any]],
+    context: dict[str, Any] | None = None,
+) -> str:
     """把页面知道的事实先交代清楚，省得每句话都要人重复。"""
     lines = [
         f"你在 vibe_excel 的构建页面里回答问题，当前项目是「{program}」。",
         "这个项目把 Excel 表物化成表，再经过若干步骤产出结果表；页面能看运行、输入和对话。",
         "回答用中文，直接说结论，不要复述用户的提问，也不要编造没看到的数据。",
     ]
+    facts = context or {}
+    files = [str(item) for item in facts.get("files") or []]
+    steps = [item for item in facts.get("steps") or [] if isinstance(item, dict)]
+    outputs = [str(item) for item in facts.get("outputs") or []]
+    if files:
+        lines.append("输入文件：" + "、".join(files))
+    if steps:
+        lines.append("处理步骤（函数：读 → 写）：")
+        for step in steps[:12]:
+            reads = "、".join(str(x) for x in step.get("reads") or []) or "—"
+            writes = "、".join(str(x) for x in step.get("writes") or []) or "—"
+            lines.append(f"- {step.get('fn')}：{reads} → {writes}")
+    if outputs:
+        lines.append("结果表：" + "、".join(outputs))
     if events:
         lines.append("该项目最近的输入变更：")
         for item in list(events)[-8:]:
@@ -170,11 +240,56 @@ def system_prompt(program: str, events: Sequence[dict[str, Any]]) -> str:
     return "\n".join(lines)
 
 
+def _flatten(messages: list[dict[str, str]]) -> tuple[str, str]:
+    """把对话摊成 (system, prompt)：pi 走命令行，只能给一段文本。"""
+    system = ""
+    turns: list[str] = []
+    for message in messages:
+        role = message.get("role")
+        content = message.get("content", "")
+        if role == "system":
+            system = content
+            continue
+        turns.append(f"{'用户' if role == 'user' else '助手'}：{content}")
+    return system, "\n\n".join(turns)
+
+
+def ask_pi(config: ChatConfig, messages: list[dict[str, str]]) -> str:
+    """借 pi 的 CLI 问一次：走的是和 DSH 同一个网关与鉴权，不用自己拼请求。"""
+    system, prompt = _flatten(messages)
+    argv = [*_pi_command(Path(config.cli)), "-p", "--no-session", "--no-tools"]
+    argv += ["--provider", config.provider, "--model", config.model]
+    if system:
+        argv += ["--system-prompt", system]
+    argv.append(prompt)
+    try:
+        done = subprocess.run(
+            argv,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=config.timeout_ms / 1000,
+            env={**os.environ},
+        )
+    except FileNotFoundError as error:
+        raise VibeError(f"起不了 pi：{error}") from error
+    except subprocess.TimeoutExpired as error:
+        raise VibeError(f"模型超过 {config.timeout_ms} ms 没有回应") from error
+    text = (done.stdout or "").strip()
+    if done.returncode != 0 or not text:
+        detail = (done.stderr or "").strip()[:200] or f"退出码 {done.returncode}"
+        raise VibeError(f"模型没有回答：{detail}")
+    return text
+
+
 def ask(config: ChatConfig, messages: list[dict[str, str]]) -> str:
     """问一次模型；失败时把能看的原因抛出去，不要静默。"""
     ready, reason = probe(config)
     if not ready:
         raise VibeError(reason)
+    if config.backend == "pi":
+        return ask_pi(config, messages)
     body = json.dumps({"model": config.model, "messages": messages, "stream": False}).encode("utf-8")
     request = urllib.request.Request(config.endpoint, data=body, method="POST")
     request.add_header("Content-Type", "application/json")
@@ -212,6 +327,7 @@ def send(
     conversation_id: str | None = None,
     new: bool = False,
     events: Sequence[dict[str, Any]] = (),
+    context: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """落用户消息 → 问模型 → 落回答，返回这段对话的最新信息。
 
@@ -225,7 +341,7 @@ def send(
     path = pick_conversation(directory, None if new else conversation_id)
     append_message(path, "user", clean)
     history = read_messages(path)
-    messages = [{"role": "system", "content": system_prompt(program, events)}, *history]
+    messages = [{"role": "system", "content": system_prompt(program, events, context)}, *history]
     try:
         reply = ask(ChatConfig.from_env(), messages)
     except VibeError as error:

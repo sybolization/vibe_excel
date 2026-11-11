@@ -16,7 +16,7 @@ from collections.abc import Mapping
 from contextlib import redirect_stderr, redirect_stdout
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 from urllib.parse import unquote, urlparse
 
 from ..util import VibeError
@@ -113,6 +113,26 @@ def _impact(store: Path, program_id: str, file_name: str) -> tuple[list[dict[str
     except VibeError:
         return [], {}
     return impact_from_view(view, file_name)
+
+
+def _chat_context(store: Path, program_id: str) -> dict[str, object]:
+    """交给模型的项目事实：输入文件、步骤、结果表。"""
+    try:
+        view = collect_book(store, program_id=program_id)
+    except VibeError:
+        return {}
+    inputs = cast("Mapping[str, Any]", view.get("inputs") or {})
+    graph = cast("Mapping[str, Any]", view.get("graph") or {})
+    files = [
+        str(item.get("name"))
+        for item in inputs.get("files") or []
+        if item.get("inBatch") is True
+    ]
+    steps = [
+        {"fn": node.get("fn"), "reads": node.get("reads") or [], "writes": node.get("writes") or []}
+        for node in graph.get("nodes") or []
+    ]
+    return {"files": files, "steps": steps, "outputs": graph.get("outputs") or []}
 
 
 def _rebuild_batch() -> dict[str, object]:
@@ -331,6 +351,8 @@ class _Handler(BaseHTTPRequestHandler):
                 conversation_id=str(payload.get("conversationId") or "") or None,
                 new=payload.get("new") is True,
                 events=events(owner)[-8:],
+                # 页面看得见的东西，模型也该看得见：不然它只能说「我看不到」
+                context=_chat_context(owner, program_id),
             )
             # ok=False 是「问模型失败」：问题已经落盘，前端要把原因显出来
             self._api(

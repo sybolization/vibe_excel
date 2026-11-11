@@ -59,6 +59,8 @@ def stub(monkeypatch: pytest.MonkeyPatch) -> Iterator[type[_Stub]]:
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     host, port = server.server_address[:2]
+    # 本机装了 pi 时默认会走 pi，这里要显式钉在 http 后端上
+    monkeypatch.setenv("VIBE_EXCEL_CHAT_BACKEND", "http")
     monkeypatch.setenv("VIBE_EXCEL_CHAT_BASE_URL", f"http://{host}:{port}/v1")
     monkeypatch.setenv("VIBE_EXCEL_CHAT_MODEL", "stub-model")
     try:
@@ -138,6 +140,7 @@ def test_send_keeps_the_question_when_backend_is_down(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     store = _store(tmp_path)
+    monkeypatch.setenv("VIBE_EXCEL_CHAT_BACKEND", "http")
     monkeypatch.setenv("VIBE_EXCEL_CHAT_BASE_URL", "http://127.0.0.1:9/v1")
 
     result = send(store, SESSION, PROGRAM, "后端没起的时候")
@@ -149,14 +152,71 @@ def test_send_keeps_the_question_when_backend_is_down(
     assert read_messages(files[0]) == [{"role": "user", "content": "后端没起的时候"}]
 
 
+def _fake_pi(tmp_path: Path, body: str) -> Path:
+    """一个假的 pi CLI：把它收到的参数和输出都写进一个文件，测得到底传了什么。"""
+    scrap = tmp_path / "pi-args.txt"
+    script = tmp_path / "fake_pi.py"
+    script.write_text(
+        "import pathlib, sys\n"
+        f"pathlib.Path({str(scrap)!r}).write_text('\\n'.join(sys.argv[1:]), encoding='utf-8')\n"
+        f"print({body!r})\n",
+        encoding="utf-8",
+    )
+    return script
+
+
+def test_send_can_go_through_pi(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store = _store(tmp_path)
+    cli = _fake_pi(tmp_path, "pi 的回答")
+    monkeypatch.setenv("VIBE_EXCEL_PI", str(cli))
+    monkeypatch.setenv("VIBE_EXCEL_CHAT_BACKEND", "pi")
+    monkeypatch.setenv("VIBE_EXCEL_CHAT_MODEL", "m")
+    monkeypatch.setenv("VIBE_EXCEL_CHAT_PROVIDER", "p")
+    monkeypatch.setenv("OPENCODE_API_KEY", "test-key")
+
+    result = send(store, SESSION, PROGRAM, "走 pi 问一句")
+
+    assert result["ok"] is True
+    assert result["reply"] == "pi 的回答"
+    argv = (tmp_path / "pi-args.txt").read_text(encoding="utf-8").splitlines()
+    assert "-p" in argv and "--no-session" in argv and "--no-tools" in argv
+    assert "--provider" in argv and "p" in argv
+    assert "--model" in argv and "m" in argv
+    assert "--system-prompt" in argv  # 项目上下文要交代给模型
+    assert any("走 pi 问一句" in item for item in argv)
+
+
+def test_pi_backend_without_key_says_what_is_missing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store = _store(tmp_path)
+    cli = _fake_pi(tmp_path, "不该被调用")
+    monkeypatch.setenv("VIBE_EXCEL_PI", str(cli))
+    monkeypatch.setenv("VIBE_EXCEL_CHAT_BACKEND", "pi")
+    monkeypatch.delenv("OPENCODE_API_KEY", raising=False)
+
+    result = send(store, SESSION, PROGRAM, "没有 key")
+
+    assert result["ok"] is False
+    assert "OPENCODE_API_KEY" in result["error"]
+
+
 def test_probe_asks_for_the_key_only_when_remote(monkeypatch: pytest.MonkeyPatch) -> None:
-    remote = ChatConfig(base_url="https://example.com/v1", model="m", key_env="NOPE_KEY", timeout_ms=1000)
+    remote = ChatConfig(
+        backend="http", provider="p", model="m", base_url="https://example.com/v1",
+        key_env="NOPE_KEY", timeout_ms=1000, cli="",
+    )
     monkeypatch.delenv("NOPE_KEY", raising=False)
     ready, reason = probe(remote)
     assert ready is False
     assert "NOPE_KEY" in reason
 
-    local = ChatConfig(base_url="http://127.0.0.1:23100/v1", model="m", key_env="NOPE_KEY", timeout_ms=1000)
+    local = ChatConfig(
+        backend="http", provider="p", model="m", base_url="http://127.0.0.1:23100/v1",
+        key_env="NOPE_KEY", timeout_ms=1000, cli="",
+    )
     assert probe(local) == (True, "")
 
 

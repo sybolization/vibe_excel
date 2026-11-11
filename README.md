@@ -71,9 +71,13 @@ uv run pytest
 | `VIBE_EXCEL_GROUND_TRUTH` | 输入批次目录（`setup` 必需） |
 | `VIBE_EXCEL_AS_OF` | 固定业务日期（默认 `2026-01-01`） |
 | `VIBE_EXCEL_MANIFEST` | 覆盖默认清单路径 |
-| `VIBE_EXCEL_CHAT_BASE_URL` | 对话后端的 OpenAI 兼容地址（默认 `http://127.0.0.1:23100/v1`） |
-| `VIBE_EXCEL_CHAT_MODEL` | 对话模型名（默认 `gpt-6.1-sol`） |
-| `VIBE_EXCEL_CHAT_KEY_ENV` | 从哪个环境变量取 key（默认 `OPENCODE_API_KEY`，本机地址不需要） |
+| `OPENCODE_API_KEY` | 模型网关的 key（`pi` 后端必需；对话面板与 `author` 都要） |
+| `VIBE_EXCEL_CHAT_BACKEND` | `pi`（默认，有 pi 时）或 `http`（任意 OpenAI 兼容接口） |
+| `VIBE_EXCEL_CHAT_PROVIDER` | `pi` 的 provider（默认 `opencode-go`） |
+| `VIBE_EXCEL_CHAT_MODEL` | 对话模型（默认 `deepseek-v4.1-flash`） |
+| `VIBE_EXCEL_CHAT_BASE_URL` | `http` 后端的地址（默认 `http://127.0.0.1:23100/v1`） |
+| `VIBE_EXCEL_CHAT_KEY_ENV` | `http` 后端从哪个环境变量取 key（默认 `OPENCODE_API_KEY`，本机地址不需要） |
+| `VIBE_EXCEL_PI` | pi 的 CLI 入口（不填则从 PATH 里的 pi 反查 `cli.js`） |
 
 ## 对话
 
@@ -86,11 +90,16 @@ uv run pytest
 
 后端没配好时**不会假装回答**：面板里直接出现「没问成：连不上模型后端 …」，问题本身照样留在会话里。
 
-本机没有真网关时，可以先起一个假网关把链路走通（页面不用改，换端口即可换真模型）：
+接真模型（默认走 `pi`，鉴权与 DSH 相同）：
 
-```bash
-python tools/stub_gateway.py         # 127.0.0.1:23100，OpenAI 兼容，回固定话术
+```powershell
+$env:OPENCODE_API_KEY = "..."        # 模型网关的 key
+.\start.ps1                           # 起服务后，右边对话就是真模型在答
 ```
+
+`pi` 不通时也可以直连任意 OpenAI 兼容接口（`VIBE_EXCEL_CHAT_BACKEND=http`）；
+本机没有真网关时，`python tools/stub_gateway.py` 会起一个回固定话术的假网关，
+用来验证链路本身。
 
 ## 构建期输入（导入 / 移出 / 撤回）
 
