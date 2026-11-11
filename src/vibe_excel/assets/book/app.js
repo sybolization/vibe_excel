@@ -781,6 +781,11 @@ if (location.search.includes("selftest")) {
     const after = tray.getBoundingClientRect().left;
     out.push(`drag dx=${Math.round(after - before)}`);
 
+    tray.querySelector(".hd .fold").dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    out.push(`trayFolded=${tray.classList.contains("collapsed")}`);
+    tray.querySelector(".hd .fold").dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    out.push(`trayUnfolded=${!tray.classList.contains("collapsed")}`);
+
     bar.querySelector(".bp-fold").dispatchEvent(new MouseEvent("click", { bubbles: true }));
     out.push(`folded=${bar.classList.contains("folded")}`);
     bar.querySelector(".bp-fold").dispatchEvent(new MouseEvent("click", { bubbles: true }));
@@ -1015,7 +1020,39 @@ if (location.search.includes("selftest")) {
   });
 
   /* ---------- 撤回 / 重建批次 ---------- */
+  const TRAY_KEY = "vibe-excel-tray";
+  const readTray = () => {
+    try {
+      return JSON.parse(localStorage.getItem(TRAY_KEY) || "{}") || {};
+    } catch {
+      return {};
+    }
+  };
+  const saveTray = (patch) => {
+    try {
+      localStorage.setItem(TRAY_KEY, JSON.stringify({ ...readTray(), ...patch }));
+    } catch {
+      /* 隐私模式：记不住就算了 */
+    }
+  };
+  const syncTray = () => {
+    const folded = tray.classList.contains("collapsed");
+    const btn = tray.querySelector(".hd .fold");
+    if (btn !== null) {
+      btn.title = folded ? "展开来源" : "收起来源";
+      btn.classList.toggle("flip", folded);
+    }
+  };
+  if (readTray().collapsed === true) tray.classList.add("collapsed");
+  syncTray();
+
   tray.addEventListener("click", async (e) => {
+    if (e.target.closest(".hd .fold") !== null) {
+      const folded = tray.classList.toggle("collapsed");
+      saveTray({ collapsed: folded });
+      syncTray();
+      return;
+    }
     const del = e.target.closest("[data-del]");
     if (del !== null) {
       e.stopPropagation();
