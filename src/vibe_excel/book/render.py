@@ -90,9 +90,21 @@ def render_book(
     diagnostics = ""
     if warnings:
         items = "".join(f"<li>{escape(warning)}</li>" for warning in warnings)
+        # 诊断做成左下角的一条侧栏：收起时只占 44px 的方块，不挡顶栏的主题开关；
+        # 展开向上浮起，不挤压底部面板。开合与宽度由 app.js 记在浏览器里。
         diagnostics = (
-            f'<details id="book-warnings"><summary>诊断 · {len(warnings)} 条（缺页仍可浏览）</summary>'
-            f"<ul>{items}</ul></details>\n"
+            f'<aside id="book-warnings" class="warn collapse" data-count="{len(warnings)}">'
+            f'<button class="warn-rail" type="button" title="诊断 · {len(warnings)} 条（缺页仍可浏览）">'
+            '<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor"'
+            ' stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">'
+            '<path d="M8 2.4 1.4 13.6h13.2L8 2.4Z"/><path d="M8 6.4v3.4M8 11.9v.7"/></svg>'
+            f"<b>{len(warnings)}</b></button>"
+            '<div class="warn-panel">'
+            f'<div class="warn-hd"><b>诊断</b><span>{len(warnings)} 条 · 缺页仍可浏览</span>'
+            '<button class="warn-x" type="button" title="收起">收起</button></div>'
+            f'<ul class="warn-list">{items}</ul>'
+            '<span class="warn-grip" title="拖动调整宽度"></span>'
+            "</div></aside>\n"
         )
     # 页面把自己的位置告诉前端：有没有上一级。单页模式下不出现，行为与以前一致。
     body_attrs = "" if home is None else f' data-home="{escape(home, quote=True)}"'
@@ -105,9 +117,6 @@ def render_book(
 <title>{escape(program)} · book</title>
 <style>
 {font_css}{css}
-#book-warnings{{position:fixed;top:12px;right:calc(var(--cw, 360px) + 12px);z-index:1000;max-width:min(640px,90vw);max-height:60vh;overflow:auto;background:var(--panel);border:1px solid var(--amber);border-radius:6px;padding:8px 12px;color:var(--ink)}}
-#book-warnings summary{{cursor:pointer;color:var(--amber)}}
-#book-warnings li{{margin:6px 0;overflow-wrap:anywhere}}
 </style>
 </head>
 <body{body_attrs}>

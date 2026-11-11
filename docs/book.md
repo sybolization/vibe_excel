@@ -87,6 +87,17 @@ python -m vibe_excel.book serve --store <store> --port 8731 --open
 运行态由 `render_book(..., runtime=...)` 写进页面里的
 `<script type="application/json" id="book-runtime">`，前端据此决定开不开这些功能。
 
+## 诊断侧栏
+
+诊断（缺页、追不到的原始文件这类）原本钉在顶栏右上，展开就盖住深浅色开关和「发布」。
+现在收在左下角：
+
+- 收起态是一个 44px 的方块，只露告警图标与条数，不占画布
+- 展开向上浮起，不挤压底部面板；右边缘可拖动改宽度（260–560px）
+- 开合与宽度记在浏览器（`localStorage` 的 `vibe-book-warn`）
+- `?warn=open` / `?warn=shut` 可以压过记忆值，排查和截图都用得上
+- 没有诊断时整个方块不渲染，不留空壳
+
 ## 构建期输入：导入 / 移出 / 撤回
 
 侧边栏管的是「构建 flow 用的输入」（ground-truth）。

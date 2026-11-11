@@ -210,6 +210,25 @@ def test_render_book_single_file_mode_has_no_fonts_or_back_link() -> None:
     assert "data-home" not in html
 
 
+def test_render_book_puts_diagnostics_in_a_bottom_left_panel() -> None:
+    view = _book_view()
+    view["warnings"] = ["表 meta 追不到原始文件", "表 quarantine 追不到原始文件"]
+    html = render_book(view)
+
+    assert 'id="book-warnings"' in html
+    # 收起态只占一个方块：原来钉在顶栏右上，会盖住主题开关
+    assert 'class="warn collapse"' in html
+    assert 'data-count="2"' in html
+    assert "表 meta 追不到原始文件" in html
+    # 位置与尺寸交给 app.css 统一管，HTML 里不再留内联定位
+    assert "position:fixed;top:12px" not in html
+
+
+def test_render_book_without_warnings_has_no_panel() -> None:
+    # 没有诊断时不留一个空方块
+    assert 'id="book-warnings"' not in render_book(_book_view())
+
+
 def test_build_site_writes_index_project_page_and_fonts(tmp_path: Path) -> None:
     root, program_id, _ = _store_with_runs(tmp_path)
     out = tmp_path / "site"

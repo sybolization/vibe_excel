@@ -408,3 +408,36 @@ button{font:inherit;color:inherit;background:none;border:0;cursor:pointer}
   padding:6px 10px;border-radius:9px;background:var(--fill);border:1px dashed var(--line2)}
 .blk.ev .evd{width:5px;height:5px;border-radius:50%;background:var(--amber);flex:none;margin-top:6px}
 .blk.ev .evt{min-width:0;word-break:break-word}
+
+/* ---------- 诊断侧栏：左下角，收起只占一个方块 ---------- */
+/* 为什么不放顶栏右上：那里有主题开关和「发布」，一展开就盖住按钮。 */
+.warn{position:fixed;z-index:60;left:12px;bottom:12px;box-sizing:border-box;
+  border-radius:14px;background:var(--panel);border:1px solid var(--line2);box-shadow:var(--shadow);
+  display:flex;flex-direction:column;font:12px/1.55 var(--font);color:var(--ink)}
+.warn.collapse{width:44px;height:44px;border-radius:13px;overflow:hidden}
+
+/* 收起态：只剩一枚带数量的告警方块 */
+.warn-rail{width:100%;height:100%;display:grid;place-items:center;gap:0;color:var(--amber);
+  border-radius:inherit;cursor:pointer}
+.warn-rail svg{display:block}
+.warn-rail b{font-size:10.5px;font-weight:600;line-height:1;color:var(--amber)}
+.warn-rail:hover{background:var(--hover)}
+.warn:not(.collapse) .warn-rail{display:none}
+
+/* 展开态：从左下角向上浮，宽度可拖 */
+.warn-panel{display:none;width:var(--warn-w,320px);max-height:min(46vh,420px);flex-direction:column}
+.warn:not(.collapse) .warn-panel{display:flex}
+.warn-hd{display:flex;align-items:center;gap:8px;padding:9px 12px 8px;flex:none;
+  border-bottom:1px solid var(--line2)}
+.warn-hd b{font-size:12.5px;font-weight:600;color:var(--amber)}
+.warn-hd span{font-size:11.5px;color:var(--muted);flex:1;min-width:0;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.warn-x{flex:none;height:22px;padding:0 8px;border-radius:7px;font:11.5px/1 var(--font);
+  color:var(--ink2);background:var(--fill)}
+.warn-x:hover{background:var(--hover);color:var(--ink)}
+.warn-list{list-style:none;margin:0;padding:8px 12px 10px;overflow:auto;min-height:0}
+.warn-list li{margin:0 0 7px;overflow-wrap:anywhere;color:var(--ink2)}
+.warn-list li:last-child{margin-bottom:0}
+.warn-grip{position:absolute;top:0;right:0;bottom:0;width:7px;cursor:ew-resize;
+  border-radius:0 14px 14px 0}
+.warn-grip:hover{background:var(--accent-soft)}

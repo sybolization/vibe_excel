@@ -1045,6 +1045,72 @@ if (location.search.includes("selftest")) {
     view.y = q.get("y") === null ? 0 : Number(q.get("y"));
     apply();
   }
+  /* ---------- 诊断侧栏：左下角，可收起、可拖宽，状态记在浏览器里 ---------- */
+  (() => {
+    const box = document.getElementById("book-warnings");
+    if (box === null) return;
+    const KEY = "vibe-book-warn";
+    const read = () => {
+      try { return JSON.parse(localStorage.getItem(KEY) || "{}") || {}; } catch { return {}; }
+    };
+    const save = (state) => {
+      try { localStorage.setItem(KEY, JSON.stringify(state)); } catch { /* 隐私模式：记不住就算了 */ }
+    };
+    // ?warn=open / ?warn=shut 可以压过记在浏览器里的状态：排查和截图都用得上，
+    // 与页面已有的 ?t= / ?focus= / ?z= 是同一套约定。
+    const forced = q.get("warn");
+    const stored = forced === "open" ? { ...read(), open: true } : forced === "shut" ? { ...read(), open: false } : read();
+    const apply = (state) => {
+      box.classList.toggle("collapse", state.open !== true);
+      const width = Math.min(560, Math.max(260, Number(state.width) || 320));
+      box.style.setProperty("--warn-w", `${width}px`);
+    };
+    apply(stored);
+
+    const rail = box.querySelector(".warn-rail");
+    if (rail !== null) {
+      rail.addEventListener("click", () => {
+        apply({ ...read(), open: true });
+        save({ ...read(), open: true });
+      });
+    }
+    const close = box.querySelector(".warn-x");
+    if (close !== null) {
+      close.addEventListener("click", () => {
+        apply({ ...read(), open: false });
+        save({ ...read(), open: false });
+      });
+    }
+    document.addEventListener("keydown", (e) => {
+      if (e.key === "Escape" && !box.classList.contains("collapse")) {
+        apply({ ...read(), open: false });
+        save({ ...read(), open: false });
+      }
+    });
+
+    /* 右边缘拖动改宽度：只在展开时有效，松手时记一次 */
+    const grip = box.querySelector(".warn-grip");
+    if (grip !== null) {
+      grip.addEventListener("pointerdown", (event) => {
+        event.preventDefault();
+        const startX = event.clientX;
+        const startW = box.getBoundingClientRect().width;
+        grip.setPointerCapture(event.pointerId);
+        const move = (e) => {
+          const width = Math.min(560, Math.max(260, startW + (e.clientX - startX)));
+          box.style.setProperty("--warn-w", `${width}px`);
+        };
+        const up = () => {
+          grip.removeEventListener("pointermove", move);
+          grip.removeEventListener("pointerup", up);
+          save({ ...read(), open: true, width: box.getBoundingClientRect().width });
+        };
+        grip.addEventListener("pointermove", move);
+        grip.addEventListener("pointerup", up);
+      });
+    }
+  })();
+
   paintTray();
   paintStale();
   const start = files.findIndex((f) => f.inBatch);
