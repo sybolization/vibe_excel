@@ -7,7 +7,6 @@ pi 自己的 bash 是前台等待，abort 还会杀掉整棵进程树，所以�
 
 from __future__ import annotations
 
-import json
 import os
 import shutil
 import subprocess
@@ -222,9 +221,4 @@ __all__ = [
 ]
 
 
-def _json_meta(workspace: Path) -> dict[str, Any]:
-    """调试用：把工作区里现有的 job 状态读出来。"""
-    root = _jobs_root(workspace)
-    if not root.is_dir():
-        return {}
-    return {item.name: json.loads(json.dumps({"claimed": (item / ".claimed").exists()})) for item in root.iterdir()}
+

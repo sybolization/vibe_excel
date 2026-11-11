@@ -19,7 +19,6 @@
   const MAX_W = 520;
   const RAIL = 40;
   const GAP = 12;
-  const FOLD_LINES = 12;
   const TIME_GAP = 5 * 60 * 1000;
 
   const state = {
@@ -242,20 +241,6 @@
     body.innerHTML =
       eventsHtml() + (html === "" ? `<div class="empty">这段对话没有消息</div>` : html);
 
-    /* 超过 12 行折叠 */
-    for (const el of body.querySelectorAll(".blk .body")) {
-      if (el.scrollHeight > FOLD_LINES * 26) {
-        el.classList.add("folded");
-        const more = document.createElement("button");
-        more.className = "more";
-        more.textContent = "展开全文";
-        more.addEventListener("click", () => {
-          const open = el.classList.toggle("folded");
-          more.textContent = open ? "展开全文" : "收起";
-        });
-        el.after(more);
-      }
-    }
     body.scrollTop = body.scrollHeight;
   }
 

@@ -244,6 +244,47 @@ def test_wake_loop_stops_after_limit(tmp_path: Path, monkeypatch: pytest.MonkeyP
     assert len(prompts) <= 4, f"唤醒只该跑有限次，实际 {len(prompts)}"
 
 
+def test_stop_terminates_the_running_process(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """停止要真的把子进程杀掉，不能只改个标记。
+
+    stream_events 会把 pi 进程 append 进传给它的盒子里；这里用一个假的进程对象
+    验证那个盒子确实被 runner 拿到、并且 terminate 被调用。
+    """
+    store, session, program = _make_conversation(tmp_path)
+    started = threading.Event()
+    killed = threading.Event()
+
+    class FakeProcess:
+        returncode = None
+
+        def poll(self) -> int | None:
+            return None
+
+        def terminate(self) -> None:
+            self.returncode = -15
+            killed.set()
+
+    def fake_stream(_config: Any, _messages: Any, **kwargs: Any):
+        box = kwargs.get("proc_box")
+        if box is not None:
+            box.append(FakeProcess())
+        started.set()
+        time.sleep(1.5)
+        yield {"type": "text", "delta": "不该出现的回答"}
+        yield {"type": "reply", "text": "不该出现的回答", "thinking": "", "calls": "[]"}
+
+    monkeypatch.setattr(chat_runner, "stream_events", fake_stream)
+    monkeypatch.setattr(chat_runner, "snapshot", lambda _workspace: "")
+    monkeypatch.setattr(chat_runner, "ensure_helper", lambda _workspace: None)
+    runner = Runner()
+
+    result = runner.send(store, session, program, "跑个长命令")
+    assert started.wait(timeout=3)
+
+    assert runner.stop(result["conversationId"])["stopped"] is True
+    assert killed.wait(timeout=2), "停止没有把子进程 terminate 掉"
+
+
 def test_send_rejects_empty_message(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     store, session, program = _make_conversation(tmp_path)
     runner = _runner_with(monkeypatch, [])

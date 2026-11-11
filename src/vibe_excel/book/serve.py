@@ -58,18 +58,6 @@ def _json(payload: dict[str, Any]) -> bytes:
     return json.dumps(payload, ensure_ascii=False).encode("utf-8")
 
 
-def _store_label(store: Path) -> str:
-    """索引页与新建弹层对同一个 store 用同一个显示名。
-
-    目录名就叫 store 时单独看没有信息量，带上上一层：多 store 时才能分清。
-    """
-    name = store.name
-    if name.lower() != "store":
-        return name
-    parent = store.parent.name
-    return f"{parent}/{name}" if parent else name
-
-
 def resolve_store(stores: list[Path], raw: object) -> Path:
     """把页面带回来的 store 路径对回已知列表，认不出就报错。
 

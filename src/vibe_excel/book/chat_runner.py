@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import json
 import queue
-import subprocess
 import threading
 import time
 from dataclasses import dataclass, field
@@ -42,7 +41,8 @@ def _now() -> str:
 class _Turn:
     """一轮正在跑的东西：进程句柄、收集到的内容、是否被用户打断。"""
 
-    proc: subprocess.Popen[str] | None = None
+    # stream_events 往这个盒子里 append 子进程；停止时要靠它真的 terminate
+    box: list[Any] = field(default_factory=list)
     stopped: bool = False
     thinking: list[str] = field(default_factory=list)
     text: list[str] = field(default_factory=list)
@@ -139,7 +139,6 @@ class Runner:
         conversation_id: str | None = None,
         new: bool = False,
         context: dict[str, Any] | None = None,
-        resume: bool = False,
     ) -> dict[str, Any]:
         """把一句话排进队，必要时把这一轮拉起来。立刻返回，不等模型。"""
         clean = text.strip()
@@ -159,7 +158,7 @@ class Runner:
         if start:
             threading.Thread(
                 target=self._drain,
-                args=(conversation, context, resume),
+                args=(conversation, context, False),
                 name=f"chat-{conversation.path.stem}",
             ).start()
         return {
@@ -177,7 +176,8 @@ class Runner:
         if conversation is None or not conversation.busy:
             return {"ok": True, "stopped": False}
         conversation.turn.stopped = True
-        proc = conversation.turn.proc
+        box = conversation.turn.box
+        proc = box[-1] if box else None
         if proc is not None and proc.poll() is None:
             try:
                 proc.terminate()
@@ -205,7 +205,6 @@ class Runner:
                 self._turn(conversation, text, context, resume=resume)
             except Exception as error:  # 一轮崩了不能把整段对话带死
                 self._publish(conversation, {"type": "error", "error": str(error)})
-            _ = resume
             with conversation.lock:
                 if not conversation.pending:
                     conversation.busy = False
@@ -286,7 +285,7 @@ class Runner:
                 ChatConfig.from_env(),
                 messages,
                 workspace=conversation.workspace,
-                proc_box=[turn],
+                proc_box=turn.box,
             ):
                 kind = event.get("type")
                 if kind == "reply":
