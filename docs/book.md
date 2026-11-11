@@ -132,6 +132,18 @@ python -m vibe_excel.book serve --store <store> --port 8731 --open
 一起变灰。刷新、换机器都成立。灰掉的节点仍然可以点开看历史，只是底栏会说
 「来源已移出输入，重建批次前不可用」。
 
+## 对话面板
+
+对话不是装饰：发出去的话会追加进项目的会话 JSONL，模型的回答也写进同一份文件。两件事一起做，
+才有「接着说」——只显示在浏览器里的话，刷新就没了，而且下一次发送会另起一段。
+
+会话文件的位置是 `sessions/<session-id>/sessions/*.jsonl`，与 `collect_book` 读的是同一处。
+续写哪一段：带 `conversationId` 就续它，不带就取最近一段；只有按「新建对话」再发才会另起。
+
+后端走 OpenAI 兼容的 `/chat/completions`，由 `VIBE_EXCEL_CHAT_BASE_URL` /
+`VIBE_EXCEL_CHAT_MODEL` / `VIBE_EXCEL_CHAT_KEY_ENV` 决定。没有可用后端时如实报错，
+不伪造回复——比让人以为说上了话更接近事实。
+
 ## 代码在哪
 
 | 文件 | 职责 |

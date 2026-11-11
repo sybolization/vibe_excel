@@ -20,6 +20,7 @@ from typing import Any
 from urllib.parse import unquote, urlparse
 
 from ..util import VibeError
+from .chat import send as chat_send
 from .collect import collect_book
 from .index_render import render_index
 from .inputs_edit import (
@@ -309,6 +310,37 @@ class _Handler(BaseHTTPRequestHandler):
                 target, program_id, reason=str(payload.get("reason") or "")
             )
             self._api({"ok": True, "event": event, "state": self._state()})
+            return
+        if path == "/api/chat/send":
+            payload = self._payload(body)
+            program_id = str(payload.get("programId") or "").strip()
+            if not program_id:
+                raise VibeError("缺少 programId")
+            owner = self._store_of(program_id)
+            project = next(
+                (item for item in collect_projects(owner) if str(item["id"]) == program_id), None
+            )
+            session_id = "" if project is None else str(project.get("activeSessionId") or "")
+            if not session_id:
+                raise VibeError("这个项目还没有可写对话的会话")
+            result = chat_send(
+                owner,
+                session_id,
+                str(project.get("name") or "") if project else "",
+                str(payload.get("text") or ""),
+                conversation_id=str(payload.get("conversationId") or "") or None,
+                new=payload.get("new") is True,
+                events=events(owner)[-8:],
+            )
+            # ok=False 是「问模型失败」：问题已经落盘，前端要把原因显出来
+            self._api(
+                {
+                    "ok": result["ok"],
+                    "error": result["error"],
+                    "reply": result["reply"],
+                    "conversationId": result["conversationId"],
+                }
+            )
             return
         if path == "/api/inputs/upload":
             # 前端把文件名 percent-encode 后放进 header：非 ASCII 直接塞 header 会被浏览器拒绝

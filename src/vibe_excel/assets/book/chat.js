@@ -29,6 +29,7 @@
     conv: 0,
     draft: null,
     unread: false,
+    sending: false,
   };
 
   /* 标题取首条用户消息的第一行，可能带 Markdown 的 `#` */
@@ -321,19 +322,95 @@
   });
   sendBtn.addEventListener("click", send);
 
-  function send() {
+  /* ?send=<一句话>：加载完直接把这句话发出去。
+     排查和截图都用得上——手点一次没法脚本化，这里走的是同一个 send()。 */
+  const autoSend = new URLSearchParams(location.search).get("send");
+  if (autoSend !== null && autoSend.trim() !== "") {
+    setTimeout(() => {
+      input.value = autoSend;
+      syncSend();
+      send();
+    }, 400);
+  }
+
+  /* 页面上下文：跟哪个项目说、状态在哪个 store、有没有后台 */
+  const contextIds = () => {
+    const book = JSON.parse(document.getElementById("book-data").textContent);
+    const el = document.getElementById("book-runtime");
+    let runtime = {};
+    try { runtime = el === null ? {} : JSON.parse(el.textContent) || {}; } catch { runtime = {}; }
+    const inputs = runtime.inputs ?? {};
+    return {
+      programId: book.program === null || book.program === undefined ? "" : book.program.id,
+      store: typeof inputs.store === "string" ? inputs.store : "",
+      live: runtime.mode === "live" && runtime.editable === true,
+    };
+  };
+
+  /* 现在这段对话（草稿也算），发送要接在它后面，而不是另起一段 */
+  const threadOf = () => {
+    if (state.view === "list") return null;
+    if (state.draft !== null) return state.draft;
+    return CHAT.conversations[state.conv] ?? null;
+  };
+
+  async function send() {
     const text = input.value.trim();
-    if (text === "") return;
-    if (state.draft === null) state.draft = { id: "draft", title: text.slice(0, 40), start: "", end: "", blocks: [] };
-    state.draft.blocks.push({ kind: "user", at: new Date().toISOString(), text });
+    if (text === "" || state.sending === true) return;
+    const ids = contextIds();
+    let thread = threadOf();
+    if (thread === null) {
+      thread = { id: "", title: text.slice(0, 40), start: new Date().toISOString(), end: "", blocks: [] };
+      CHAT.conversations.unshift(thread);
+      state.conv = 0;
+      state.view = "thread";
+    }
+    /* 草稿 / 没有 id 的对话才算「新开一段」；有 id 就续写，别动不动换一段 */
+    const isNew = thread.id === "" || thread.id === "draft";
+    thread.blocks.push({ kind: "user", at: new Date().toISOString(), text });
     input.value = "";
     input.style.height = "auto";
     syncSend();
+    const pending = { kind: "event", at: new Date().toISOString(), text: "等模型回答…" };
+    thread.blocks.push(pending);
+    state.sending = true;
     paint();
     if (!state.open) {
       state.unread = true;
       paintRail();
     }
+    if (!ids.live) {
+      pending.text = "发送需要从 start.ps1 启动服务";
+      state.sending = false;
+      paint();
+      return;
+    }
+    try {
+      const response = await fetch("/api/chat/send", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          programId: ids.programId,
+          store: ids.store,
+          conversationId: isNew ? "" : thread.id,
+          new: isNew,
+          text,
+        }),
+      });
+      const data = await response.json();
+      if (data.ok === true) {
+        thread.id = data.conversationId || thread.id;
+        thread.end = new Date().toISOString();
+        pending.kind = "assistant";
+        pending.text = data.reply;
+      } else {
+        pending.text = `没问成：${data.error || "未知原因"}`;
+      }
+    } catch (error) {
+      pending.text = `没问成：${error.message}`;
+    }
+    state.sending = false;
+    paint();
   }
 
   /* 引用选中的节点 */
