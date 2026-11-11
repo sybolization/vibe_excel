@@ -188,6 +188,24 @@ def parse_conversation(
         content = message.get("content")
         at = stamp if isinstance(stamp, str) else ""
 
+        if role == "note":
+            # 系统事件的记录（比如「用户按了停止」）：不当成人说的话
+            raw_note = _text_parts(content)
+            try:
+                payload = json.loads(raw_note) if raw_note.strip() else {}
+            except json.JSONDecodeError:
+                payload = {}
+            kind = str((payload or {}).get("kind") or "")
+            label = "你按了停止" if kind == "interrupted" else raw_note.strip()
+            if label:
+                blocks.append(
+                    {
+                        "kind": "event", "at": at, "text": clip(label, _CLIP_TEXT),
+                        "name": "", "brief": "", "ok": True, "ms": None, "result": "",
+                    }
+                )
+            continue
+
         if role == "user":
             joined = _text_parts(content).removeprefix("\ufeff")
             if not joined.strip():

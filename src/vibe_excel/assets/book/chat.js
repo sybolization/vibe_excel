@@ -124,6 +124,13 @@
   const body = panel.querySelector(".chat-bd");
   const input = panel.querySelector("textarea");
   const sendBtn = panel.querySelector(".chat-send");
+  /* 停止按钮和发送同位置：跑起来的时候它才出现 */
+  const stopBtn = document.createElement("button");
+  stopBtn.className = "chat-send chat-stop";
+  stopBtn.type = "button";
+  stopBtn.textContent = "停止";
+  stopBtn.hidden = true;
+  sendBtn.after(stopBtn);
   const quoteBtn = panel.querySelector(".chat-quote");
   const title = panel.querySelector(".chat-tt");
 
@@ -325,6 +332,9 @@
   /* 输入 */
   const syncSend = () => {
     sendBtn.disabled = input.value.trim() === "";
+    /* 正在跑的时候把发送换成停止：不然只能干等 */
+    sendBtn.hidden = state.sending === true;
+    stopBtn.hidden = state.sending !== true;
   };
   input.addEventListener("input", () => {
     input.style.height = "auto";
@@ -341,6 +351,7 @@
     }
   });
   sendBtn.addEventListener("click", send);
+  stopBtn.addEventListener("click", stop);
 
   /* ?send=<一句话>：加载完直接把这句话发出去。
      排查和截图都用得上——手点一次没法脚本化，这里走的是同一个 send()。 */
@@ -374,25 +385,52 @@
     return CHAT.conversations[state.conv] ?? null;
   };
 
+  /* 一段对话一条事件流：发出去的消息由服务端排队，回答从这条流里回来。 */
+  let stream = null;
+  let streamFor = "";
+
+  const closeStream = () => {
+    if (stream !== null) stream.close();
+    stream = null;
+    streamFor = "";
+  };
+
+  const openStream = (conversationId, handle) => {
+    if (conversationId === "" || streamFor === conversationId) return;
+    closeStream();
+    streamFor = conversationId;
+    stream = new EventSource(`/api/chat/events?conversationId=${encodeURIComponent(conversationId)}`);
+    stream.onmessage = (message) => {
+      let event = null;
+      try { event = JSON.parse(message.data); } catch { return; }
+      handle(event);
+    };
+    /* 流断了不重连：这一轮的结果已经落盘，刷新就能看到，不值得在这儿死撑 */
+    stream.onerror = () => closeStream();
+  };
+
   async function send() {
     const text = input.value.trim();
     if (text === "" || state.sending === true) return;
     const ids = contextIds();
     let thread = threadOf();
     if (thread === null) {
-      thread = { id: "", title: text.slice(0, 40), start: new Date().toISOString(), end: "", blocks: [] };
+      thread = {
+        id: "draft",
+        title: cleanTitle(text),
+        start: new Date().toISOString(),
+        end: null,
+        blocks: [],
+      };
       CHAT.conversations.unshift(thread);
-      state.conv = 0;
-      state.view = "thread";
+      state.draft = thread;
     }
-    /* 草稿 / 没有 id 的对话才算「新开一段」；有 id 就续写，别动不动换一段 */
     const isNew = thread.id === "" || thread.id === "draft";
     thread.blocks.push({ kind: "user", at: new Date().toISOString(), text });
     input.value = "";
-    input.style.height = "auto";
     syncSend();
+
     const at = new Date().toISOString();
-    /* 两块现场长出来：思考（默认折叠）与回答（逐字填）。 */
     const thought = { kind: "thinking", at, text: "", live: true };
     const answer = { kind: "assistant", at, text: "" };
     const calls = new Map();
@@ -410,13 +448,11 @@
       return;
     }
 
-    /* 只重画正在长的那两块：整段重绘会让滚动位置和折叠状态一直跳 */
     const liveNodes = () => ({
       think: [...body.querySelectorAll(".blk.think .thinkbody")].pop() ?? null,
       thinkHeader: [...body.querySelectorAll(".blk.think .tp")].pop() ?? null,
       answer: [...body.querySelectorAll(".blk.a .body")].pop() ?? null,
     });
-    /* 想完了：把流光和展开收掉，它就该安静地待在回答上面 */
     const settleThought = () => {
       if (thought.live !== true) return;
       thought.live = false;
@@ -441,9 +477,74 @@
         if (nodes.answer !== null) nodes.answer.innerHTML = renderMd(answer.text) || "…";
       });
     };
+    const finish = () => {
+      settleThought();
+      state.sending = false;
+      paint();
+    };
+
+    const handle = (event) => {
+      if (event.type === "thinking") {
+        thought.text += event.delta ?? "";
+        repaint();
+        return;
+      }
+      if (event.type === "call") {
+        /* 工具调用真发生了就当场长一行：它干了什么，不该等回答完才知道 */
+        const block = { kind: "tool", at, name: event.name ?? "?", brief: event.brief ?? "", ok: true, result: "", ms: null };
+        calls.set(String(event.id ?? ""), block);
+        thread.blocks.splice(thread.blocks.indexOf(answer), 0, block);
+        settleThought();
+        paint();
+        return;
+      }
+      if (event.type === "result") {
+        const block = calls.get(String(event.id ?? ""));
+        if (block !== undefined) {
+          block.ok = String(event.ok ?? "1") !== "0";
+          block.result = event.text ?? "";
+          const ms = Number(event.ms);
+          block.ms = Number.isFinite(ms) ? ms : null;
+          paint();
+        }
+        return;
+      }
+      if (event.type === "text") {
+        answer.text += event.delta ?? "";
+        settleThought();
+        repaint();
+        return;
+      }
+      if (event.type === "done") {
+        thread.end = new Date().toISOString();
+        if (answer.text === "") thread.blocks.splice(thread.blocks.indexOf(answer), 1);
+        if (thought.text === "") thread.blocks.splice(thread.blocks.indexOf(thought), 1);
+        closeStream();
+        finish();
+        return;
+      }
+      if (event.type === "interrupted") {
+        thread.blocks.splice(thread.blocks.indexOf(answer), 1);
+        thread.blocks.splice(thread.blocks.indexOf(thought) + 1, 0, { kind: "event", at, text: "你按了停止" });
+        if (thought.text === "") thread.blocks.splice(thread.blocks.indexOf(thought), 1);
+        closeStream();
+        finish();
+        return;
+      }
+      if (event.type === "error") {
+        thread.blocks.splice(thread.blocks.indexOf(answer), 1);
+        thread.blocks.splice(thread.blocks.indexOf(thought) + 1, 0, { kind: "event", at, text: `没问成：${event.error ?? "未知原因"}` });
+        if (thought.text === "") thread.blocks.splice(thread.blocks.indexOf(thought), 1);
+        closeStream();
+        finish();
+      }
+    };
 
     try {
-      const response = await fetch("/api/chat/stream", {
+      /* 注意顺序：先 POST 再挂流。服务端在 POST 里就建好了这段对话的执行状态，
+         挂流时订阅得到，backlog 会把已经发生的事件补齐。 */
+
+      const response = await fetch("/api/chat/send", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -454,72 +555,33 @@
           text,
         }),
       });
-      if (!response.ok || response.body === null) {
-        const detail = await response.text().catch(() => "");
-        throw new Error(detail.slice(0, 120) || `HTTP ${response.status}`);
+      let data = null;
+      try { data = await response.json(); } catch { data = null; }
+      if (data === null || data.ok !== true) {
+        throw new Error((data && data.error) || `HTTP ${response.status}`);
       }
-      const reader = response.body.getReader();
-      const decoder = new TextDecoder();
-      let buffer = "";
-      let failure = "";
-      for (;;) {
-        const chunk = await reader.read();
-        if (chunk.done) break;
-        buffer += decoder.decode(chunk.value, { stream: true });
-        let cut = buffer.indexOf("\n");
-        while (cut >= 0) {
-          const line = buffer.slice(0, cut).trim();
-          buffer = buffer.slice(cut + 1);
-          cut = buffer.indexOf("\n");
-          if (line === "") continue;
-          let event = null;
-          try { event = JSON.parse(line); } catch { continue; }
-          if (event.type === "call") {
-            /* 工具调用真的发生了，就当场长出一行——它干了什么，不该等回答完才知道 */
-            const block = { kind: "tool", at, name: event.name ?? "?", brief: event.brief ?? "", ok: true, result: "", ms: null };
-            calls.set(String(event.id ?? ""), block);
-            thread.blocks.splice(thread.blocks.indexOf(answer), 0, block);
-            settleThought();
-            paint();
-          } else if (event.type === "result") {
-            const block = calls.get(String(event.id ?? ""));
-            if (block !== undefined) {
-              block.ok = String(event.ok ?? "1") !== "0";
-              block.result = event.text ?? "";
-              const ms = Number(event.ms);
-              block.ms = Number.isFinite(ms) ? ms : null;
-              paint();
-            }
-          } else if (event.type === "thinking") {
-            thought.text += event.delta;
-            repaint();
-          } else if (event.type === "text") {
-            answer.text += event.delta;
-            settleThought();
-            repaint();
-          } else if (event.type === "done") {
-            thread.id = event.conversationId || thread.id;
-            thread.end = new Date().toISOString();
-          } else if (event.type === "error") {
-            failure = event.error || "未知原因";
-          }
-        }
-      }
-      settleThought();
-      if (failure !== "") {
-        thread.blocks.splice(thread.blocks.indexOf(answer), 1);
-        thread.blocks.splice(thread.blocks.indexOf(thought) + 1, 0, { kind: "event", at, text: `没问成：${failure}` });
-        if (thought.text === "") thread.blocks.splice(thread.blocks.indexOf(thought), 1);
-      } else if (answer.text === "") {
-        thread.blocks.splice(thread.blocks.indexOf(answer), 1);
-        if (thought.text === "") thread.blocks.splice(thread.blocks.indexOf(thought), 1);
-      }
+      thread.id = data.conversationId || thread.id;
+      openStream(thread.id, handle);
     } catch (error) {
       thread.blocks.splice(thread.blocks.indexOf(answer), 1);
-      thread.blocks.push({ kind: "event", at, text: `没问成：${error.message}` });
+      thread.blocks.splice(thread.blocks.indexOf(thought) + 1, 0, { kind: "event", at, text: `没问成：${error.message}` });
+      if (thought.text === "") thread.blocks.splice(thread.blocks.indexOf(thought), 1);
+      finish();
     }
-    state.sending = false;
-    paint();
+  }
+
+  async function stop() {
+    const thread = threadOf();
+    if (thread === null || thread.id === "" || thread.id === "draft") return;
+    try {
+      await fetch("/api/chat/stop", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ conversationId: thread.id }),
+      });
+    } catch {
+      /* 停不下来就算了：这一轮结果仍然会落盘 */
+    }
   }
 
   /* 引用选中的节点 */

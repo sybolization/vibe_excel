@@ -437,6 +437,7 @@ def stream_events(
     messages: list[dict[str, str]],
     *,
     workspace: Path | None = None,
+    proc_box: list[Any] | None = None,
 ) -> Iterator[dict[str, str]]:
     """边跑边吐增量：thinking 一段、text 一段，最后一条是 reply。
 
@@ -465,6 +466,9 @@ def stream_events(
         env={**os.environ},
         cwd=str(workspace) if workspace is not None else None,
     )
+    # 停止按钮要能摸到这个进程：调用方把小盒子递进来，拿到句柄再 kill
+    if proc_box is not None:
+        proc_box.append(process)
     think_parts: list[str] = []
     text_parts: list[str] = []
     calls: list[dict[str, object]] = []

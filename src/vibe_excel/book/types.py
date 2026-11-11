@@ -134,7 +134,7 @@ class EpisodeView(TypedDict):
 class ChatBlock(TypedDict):
     """对话里的一块：人说的一段、agent 说的一段、agent 的思考、或者一次工具执行。"""
 
-    kind: Literal["user", "assistant", "tool", "thinking"]
+    kind: Literal["user", "assistant", "tool", "thinking", "event"]
     # 这一块发生的时间（ISO）。工具块沿用发起它的那条消息的时间。
     at: str
     # 人说 / agent 说的正文，Markdown；工具块为空串。

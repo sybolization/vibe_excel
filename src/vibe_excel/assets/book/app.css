@@ -323,6 +323,8 @@ button{font:inherit;color:inherit;background:none;border:0;cursor:pointer}
 .tool .tn{color:var(--muted);flex:none;font-weight:400}
 .tool .tb{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--muted)}
 /* 失败只在行尾挂一枚徽标：红点 + 一句原因，不动整行颜色 */
+.chat-stop{background:var(--ink);color:var(--bg)}
+.chat-stop[hidden]{display:none}
 .tool .fail{flex:none;display:inline-flex;align-items:center;gap:5px;padding:1px 7px;border-radius:999px;
   background:var(--raise);color:var(--ink2);font-size:11px;line-height:16px;white-space:nowrap}
 .tool .fail .fd{width:5px;height:5px;border-radius:50%;background:#e5484d;flex:none}

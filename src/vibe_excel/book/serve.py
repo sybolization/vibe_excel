@@ -12,17 +12,18 @@ from __future__ import annotations
 
 import io
 import json
+import queue
 import threading
 from collections.abc import Mapping
 from contextlib import redirect_stderr, redirect_stdout
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, cast
-from urllib.parse import unquote, urlparse
+from urllib.parse import parse_qs, unquote, urlparse
 
 from ..util import VibeError
-from .chat import send as chat_send
 from .chat import send_stream as chat_stream
+from .chat_runner import Runner
 from .collect import collect_book
 from .index_render import render_index
 from .inputs_edit import (
@@ -203,6 +204,8 @@ def _rebuild_batch() -> dict[str, object]:
 
 class _Handler(BaseHTTPRequestHandler):
     stores: list[Path] = []
+    root: Path | None = None
+    runner: Runner
     server_version = "vibe-book/1"
 
     # ---- 输出helpers ----
@@ -338,6 +341,9 @@ class _Handler(BaseHTTPRequestHandler):
             if path == "/api/state":
                 self._api(self._state())
                 return
+            if path == "/api/chat/events":
+                self._chat_events(parse_qs(urlparse(self.path).query))
+                return
             if path.startswith("/fonts/"):
                 target = _ASSETS / "fonts" / Path(path).name
                 if not target.is_file():
@@ -361,6 +367,39 @@ class _Handler(BaseHTTPRequestHandler):
         length = int(self.headers.get("Content-Length") or 0)
         body = self.rfile.read(length) if length else b""
         try:
+            if path == "/api/chat/send":
+                # 只排队、不等模型：回答由 /api/chat/events 那条流推回页面
+                payload = self._payload(body)
+                program_id = str(payload.get("programId") or "").strip()
+                if not program_id:
+                    raise VibeError("缺少 programId")
+                owner = self._store_of(program_id)
+                project = next(
+                    (item for item in collect_projects(owner) if str(item["id"]) == program_id), None
+                )
+                session_id = "" if project is None else str(project.get("activeSessionId") or "")
+                if not session_id:
+                    raise VibeError("这个项目还没有可写对话的会话")
+                result = self.runner.send(
+                    owner,
+                    session_id,
+                    str(project.get("name") or "") if project else "",
+                    str(payload.get("text") or ""),
+                    conversation_id=str(payload.get("conversationId") or "") or None,
+                    new=payload.get("new") is True,
+                    context=_chat_context(owner, program_id),
+                )
+                self._api({**result, "state": self.runner.state(result["conversationId"])})
+                return
+            if path == "/api/chat/stop":
+                payload = self._payload(body)
+                conversation_id = str(payload.get("conversationId") or "").strip()
+                if not conversation_id:
+                    raise VibeError("缺少 conversationId")
+                self._api(
+                    {**self.runner.stop(conversation_id), "state": self.runner.state(conversation_id)}
+                )
+                return
             if path == "/api/chat/stream":
                 # 等模型说话是长动作，不能占着全局锁：不然这十几秒里导入/移出全都动不了
                 self._chat_stream(body)
@@ -371,6 +410,46 @@ class _Handler(BaseHTTPRequestHandler):
             self._api({"ok": False, "error": str(error)}, status=400)
         except OSError as error:
             self._api({"ok": False, "error": str(error)}, status=500)
+
+    def _chat_events(self, query: dict[str, list[str]]) -> None:
+        """SSE：把这一轮的事件推给页面。一段对话一条连接。"""
+        conversation_id = (query.get("conversationId") or [""])[0].strip()
+        if not conversation_id:
+            self._api({"ok": False, "error": "缺少 conversationId"}, status=400)
+            return
+        subscription = self.runner.subscribe(conversation_id)
+        incoming: queue.Queue[dict[str, Any]]
+        backlog: list[dict[str, Any]] = []
+        if subscription is None:
+            incoming = queue.Queue()
+        else:
+            incoming, backlog = subscription
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream; charset=utf-8")
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("Connection", "keep-alive")
+        self.end_headers()
+        self.close_connection = True
+        try:
+            for pending in backlog:
+                self.wfile.write(f"data: {json.dumps(pending, ensure_ascii=False)}\n\n".encode())
+            self.wfile.flush()
+            while True:
+                try:
+                    event = incoming.get(timeout=15)
+                except queue.Empty:
+                    self.wfile.write(b": ping\n\n")
+                    self.wfile.flush()
+                    continue
+                data = json.dumps(event, ensure_ascii=False)
+                self.wfile.write(f"data: {data}\n\n".encode())
+                self.wfile.flush()
+                if event.get("type") in ("done", "error", "interrupted"):
+                    return
+        except (BrokenPipeError, ConnectionResetError):
+            return
+        finally:
+            self.runner.unsubscribe(conversation_id, incoming)
 
     def _chat_stream(self, body: bytes) -> None:
         """边算边写：一行一个 JSON，前端按行读。"""
@@ -467,39 +546,6 @@ class _Handler(BaseHTTPRequestHandler):
             )
             self._api({"ok": True, "event": event, "state": self._state()})
             return
-        if path == "/api/chat/send":
-            payload = self._payload(body)
-            program_id = str(payload.get("programId") or "").strip()
-            if not program_id:
-                raise VibeError("缺少 programId")
-            owner = self._store_of(program_id)
-            project = next(
-                (item for item in collect_projects(owner) if str(item["id"]) == program_id), None
-            )
-            session_id = "" if project is None else str(project.get("activeSessionId") or "")
-            if not session_id:
-                raise VibeError("这个项目还没有可写对话的会话")
-            result = chat_send(
-                owner,
-                session_id,
-                str(project.get("name") or "") if project else "",
-                str(payload.get("text") or ""),
-                conversation_id=str(payload.get("conversationId") or "") or None,
-                new=payload.get("new") is True,
-                events=events(owner)[-8:],
-                # 页面看得见的东西，模型也该看得见：不然它只能说「我看不到」
-                context=_chat_context(owner, program_id),
-            )
-            # ok=False 是「问模型失败」：问题已经落盘，前端要把原因显出来
-            self._api(
-                {
-                    "ok": result["ok"],
-                    "error": result["error"],
-                    "reply": result["reply"],
-                    "conversationId": result["conversationId"],
-                }
-            )
-            return
         if path == "/api/inputs/upload":
             # 前端把文件名 percent-encode 后放进 header：非 ASCII 直接塞 header 会被浏览器拒绝
             name = unquote(self.headers.get("X-Filename") or "")
@@ -556,7 +602,9 @@ def serve(
     # 工作区根目录：新建项目落在它下面。不给就用第一个库的上一级。
     workspace_root = root if root is not None else stores[0].parent
     handler = type(
-        "BoundHandler", (_Handler,), {"stores": stores, "root": workspace_root}
+        "BoundHandler",
+        (_Handler,),
+        {"stores": stores, "root": workspace_root, "runner": Runner()},
     )
     httpd = ThreadingHTTPServer((host, port), handler)
     url = f"http://{host}:{port}/"
