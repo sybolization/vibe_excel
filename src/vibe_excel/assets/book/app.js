@@ -622,8 +622,6 @@
     const goneNote = gone ? '<div class="bp-note">来源已移出输入，重建批次前不可用</div>' : "";
     bar.innerHTML = `
       <div class="bp-hd">
-        <button class="btab">本次运行</button>
-        <button class="btab on">选中</button>
         <div class="bp-path">${path}</div>
         <span class="bp-meta">${esc(meta)}</span>
       <button class="bp-fold" title="收起/展开"><svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 7.5 6 4l3.5 3.5"/></svg></button></div>
@@ -632,7 +630,7 @@
   }
 
   /* ---------- 选中与聚焦 ---------- */
-  /* 点一个节点，点亮的是它自己那条链  /* 点一个节点，点亮的是它自己那条链：上下游都算，其余退到背景。
+  /* 点一个节点，点亮的是它自己那条链：上下游都算，其余退到背景。
      之前这里传的是 null，等于什么都没高亮——画布上那条蓝色运行路径永远不变。 */
   function chainOf(id) {
     const lit = new Set([id]);

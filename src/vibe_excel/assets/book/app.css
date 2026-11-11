@@ -189,9 +189,6 @@ button{font:inherit;color:inherit;background:none;border:0;cursor:pointer}
 .bp{right:calc(var(--cw,360px) + 12px);bottom:12px;width:min(860px,calc(100vw - var(--cw,360px) - 300px));height:auto;max-height:236px;display:flex;flex-direction:column;
   border-radius:16px;overflow:hidden;background:var(--glass-panel)}
 .bp-hd{display:flex;align-items:center;gap:14px;height:38px;padding:0 14px;flex:none;border-bottom:1px solid var(--line2)}
-.btab{position:relative;height:38px;padding:0;font-size:12.5px;color:var(--ink2)}
-.btab.on{color:var(--ink);font-weight:500}
-.btab.on::after{content:"";position:absolute;left:0;right:0;bottom:-1px;height:2px;border-radius:1px;background:var(--accent)}
 .bp-path{flex:1;display:flex;align-items:center;gap:7px;overflow:hidden;min-width:0;white-space:nowrap;font:11.5px var(--mono);color:var(--muted)}
 .bp-path button{font:11.5px var(--font);color:var(--ink2)}
 .bp-path .sep{color:var(--faint);flex:none}
