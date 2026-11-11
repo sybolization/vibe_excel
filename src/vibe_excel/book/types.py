@@ -308,6 +308,8 @@ class ProjectSummary(TypedDict):
     id: str
     name: str
     createdAt: str
+    # 站点合并多个 store 时才有值，用来在列表里区分来源
+    store: NotRequired[str]
     sessions: list[SessionSummary]
     # 默认进入哪个会话：活动的、且 updated_at 最新的那个；没有会话时为 None。
     activeSessionId: str | None

@@ -115,6 +115,10 @@ def _row(project: ProjectSummary, href: str | None) -> str:
         sub = escape(active["name"])
         if len(sessions) > 1:
             sub += f" · 共 {len(sessions)} 个会话"
+    # 站点合并多个 store 时先亮出来源，否则两个同名项目分不清
+    origin = project.get("store")
+    if origin:
+        sub = f"{escape(origin)} · {sub}"
     chip, text = _status(project)
     run = project["lastRun"]
     when = _when(None if run is None else run["at"])

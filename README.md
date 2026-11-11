@@ -6,6 +6,26 @@
 核心执行与 HTML 导出只需要 Python 和 Git，不依赖原始代码检出或 Node。
 可选的 pi RPC 集成需要 Node 和 pi。
 
+## 启动
+
+```powershell
+cd C:\project\vibe_excel-python
+.\start.ps1
+```
+
+默认三步：在数据目录下找 store → 渲染站点 → 打开索引页。
+产物落在 `..\site\`（`index.html` + 每个项目一页 + `fonts/`）。
+双击 `start.cmd` 等价于不带参数运行，能绕开脚本执行策略。
+
+| 参数 | 作用 |
+| --- | --- |
+| `-Store <目录>` | 指定 store，**可给多个**，合并成一张项目列表 |
+| `-Root <目录>` | 换个位置找 store，默认是仓库的上一级 |
+| `-Full` | 从零跑一轮：setup → run → publish → 出站点（只接一个 store） |
+| `-Status` | 只打印每个 store 的状态，不生成文件 |
+| `-Test` | 跑测试 |
+| `-NoOpen` | 生成但不打开浏览器 |
+
 ## 快速开始
 
 ```powershell
@@ -52,6 +72,9 @@ uv run pytest
 ```powershell
 # 站点（推荐）：一个目录，索引 + 每个项目一页 + 字体，离线可开
 uv run python -m vibe_excel.book build --store C:\data\store --out .\exports\site
+
+# 多个 store 合成一张列表（--store 可以重复）
+uv run python -m vibe_excel.book build --store C:\data\a --store C:\data\b --out .\exports\site
 
 # 单页：只出某一个项目的账页，样式与站点里的项目页相同
 uv run python -m vibe_excel.book build --store C:\data\store --out .\exports\book.html

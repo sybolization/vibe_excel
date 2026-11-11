@@ -219,6 +219,38 @@ def test_build_site_writes_index_project_page_and_fonts(tmp_path: Path) -> None:
     assert "fonts/HarmonyOS_Sans_SC_Regular.ttf" in text
 
 
+def test_build_site_merges_several_stores(tmp_path: Path) -> None:
+    first, program_id, _ = _store_with_runs(tmp_path)
+    second = tmp_path / "second" / "store"
+    SessionStore.open(second).create_program("other-project")
+    out = tmp_path / "site"
+
+    assert (
+        run_cli(
+            ["build", "--store", str(first), "--store", str(second), "--out", str(out)]
+        )
+        == 0
+    )
+
+    html = (out / "index.html").read_text(encoding="utf-8")
+    assert "demo-sales" in html
+    assert "other-project" in html
+    # 多个 store 时每一行都要标出来源，否则同名项目分不清
+    assert "second/store" in html
+    assert "2 个 store" in html
+    assert (out / page_name(program_id)).is_file()
+
+
+def test_single_store_rows_have_no_source_label(tmp_path: Path) -> None:
+    root, _, _ = _store_with_runs(tmp_path)
+    out = tmp_path / "site"
+
+    assert run_cli(["build", "--store", str(root), "--out", str(out)]) == 0
+    html = (out / "index.html").read_text(encoding="utf-8")
+    # 只有一个 store 时不必每行都重复一遍来源
+    assert "store · " not in html
+
+
 def test_build_site_keeps_project_without_session_listed(tmp_path: Path) -> None:
     root = tmp_path / "store"
     SessionStore.open(root).create_program("no-session")

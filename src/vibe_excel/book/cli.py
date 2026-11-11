@@ -18,22 +18,26 @@ from .collect import collect_book
 from .index_render import render_index
 from .projects import collect_projects, page_name
 from .render import _ASSETS, render_book
-from .types import BookView
+from .types import BookView, ProjectSummary
 
 USAGE = (
-    "build --store <store 目录> --out <html 路径 | 站点目录> [--session <会话 id>] [--run <运行 id>]\n"
-    "        --out 以 .html/.htm 结尾出单页；否则当作站点目录，出 index.html + 每项目一页"
+    "build --store <store 目录> [--store ...] --out <html 路径 | 站点目录>"
+    " [--session <会话 id>] [--run <运行 id>]\n"
+    "        --store 可以给多次，多个 store 合成一个索引；\n"
+    "        --out 以 .html/.htm 结尾出单页（只接一个 store），否则出站点"
 )
 
 
-def _arguments(argv: list[str]) -> dict[str, str]:
-    """解析 build 子命令的参数。
+def _arguments(argv: list[str]) -> tuple[list[Path], dict[str, str]]:
+    """解析 build 子命令的参数，返回 (store 列表, 其余标志)。
 
-    只接受 --store/--out/--session/--run 四个标志，并强制要求前两个；
+    --store 可以重复给：多个 store 合成一个索引页。
+    --session / --run 只对单页模式有意义。
     未知或缺少值的标志直接抛出面向用户的用法错误。
     """
     if not argv or argv[0] != "build":
         raise VibeError(f"用法：{USAGE}")
+    stores: list[Path] = []
     flags: dict[str, str] = {}
     index = 1
     while index < len(argv):
@@ -42,12 +46,16 @@ def _arguments(argv: list[str]) -> dict[str, str]:
             raise VibeError(f"未知参数 {token}\n用法：{USAGE}")
         if index + 1 == len(argv) or argv[index + 1].startswith("--"):
             raise VibeError(f"参数 {token} 缺少值\n用法：{USAGE}")
-        flags[token[2:]] = argv[index + 1]
+        if token == "--store":
+            stores.append(Path(argv[index + 1]).resolve())
+        else:
+            flags[token[2:]] = argv[index + 1]
         index += 2
-    for name in ("store", "out"):
-        if not flags.get(name):
-            raise VibeError(f"缺少参数 --{name}\n用法：{USAGE}")
-    return flags
+    if not stores:
+        raise VibeError(f"缺少参数 --store\n用法：{USAGE}")
+    if not flags.get("out"):
+        raise VibeError(f"缺少参数 --out\n用法：{USAGE}")
+    return stores, flags
 
 
 def _summarize(view: BookView) -> None:
@@ -87,18 +95,42 @@ def _install_fonts(out: Path) -> None:
     shutil.copytree(source, out / "fonts", dirs_exist_ok=True)
 
 
-def _build_site(store: Path, out: Path) -> int:
+def _build_site(stores: list[Path], out: Path) -> int:
     """渲染整个站点：索引 + 每个项目一页 + 字体。
 
+    多个 store 合成一张列表，每个项目记住自己来自哪个 store，索引页据此标出来源。
     单个项目采不到（没有会话、库被占用等）不拖垮整站：那一行还列着，只是不给链接。
     """
-    projects = collect_projects(store)
+    multi = len(stores) > 1
+    pairs: list[tuple[Path, ProjectSummary]] = []
+    for store in stores:
+        for project in collect_projects(store):
+            if multi:
+                # 「store」这种通用目录名单独看没有信息量，带上它的上一层更好认
+                name = store.name or str(store)
+                project["store"] = (
+                    name if name.lower() != "store" else f"{store.parent.name}/{name}"
+                )
+            pairs.append((store, project))
+    # 合并后重新排一次：最近活跃的在前，与单个 store 的规则保持一致。
+    pairs.sort(
+        key=lambda item: (
+            (item[1]["lastRun"]["at"] if item[1]["lastRun"] is not None else None)
+            or item[1]["createdAt"]
+        ),
+        reverse=True,
+    )
+
     out.mkdir(parents=True, exist_ok=True)
     _install_fonts(out)
 
     pages: dict[str, str] = {}
-    for project in projects:
+    used: set[str] = set()
+    for store, project in pairs:
         name = page_name(project["id"])
+        if name in used:
+            # 理论上 id 是 uuid 不会撞；真撞了也不能互相覆盖。
+            name = f"p-{project['id'][:8]}-{len(used)}.html"
         try:
             view = collect_book(
                 store, program_id=project["id"], session_id=project["activeSessionId"]
@@ -110,15 +142,16 @@ def _build_site(store: Path, out: Path) -> int:
             render_book(view, fonts="fonts/", home="index.html"), encoding="utf-8"
         )
         pages[project["id"]] = name
+        used.add(name)
 
-    index = render_index(
-        projects, store_label=store.name or str(store), pages=pages
-    )
+    label = stores[0].name if not multi else f"{len(stores)} 个 store"
+    index = render_index([project for _, project in pairs], store_label=label, pages=pages)
     (out / "index.html").write_text(index, encoding="utf-8")
-    print(f"程序   {len(projects)} 个，已出页面 {len(pages)} 个")
-    for project in projects:
+    print(f"程序   {len(pairs)} 个，已出页面 {len(pages)} 个")
+    for store, project in pairs:
+        where = f"{store.name}/" if multi else ""
         state = "已出页面" if project["id"] in pages else "未出页面"
-        print(f"       {project['name']:<18} {project['runCount']} 次运行 {state}")
+        print(f"       {where}{project['name']:<18} {project['runCount']} 次运行 {state}")
     print(f"\n落盘   {out}\\index.html（{round(len(index.encode('utf-8')) / 1024)} KB）")
     return 0
 
@@ -132,8 +165,8 @@ def run_cli(argv: list[str]) -> int:
         print(f"用法：{USAGE}\n产出：一个自包含的 HTML 账页，或一个可离线打开的站点目录")
         return 0
     try:
-        flags = _arguments(argv)
-        store, out = Path(flags["store"]).resolve(), Path(flags["out"]).resolve()
+        stores, flags = _arguments(argv)
+        store, out = stores[0], Path(flags["out"]).resolve()
         # 输出绝不能落在源库上，否则会直接破坏 control.db。
         if out == store / "control.db" or out.suffix.lower() == ".db":
             raise VibeError(f"不能把 HTML 导出到源数据库：{out}")
@@ -142,13 +175,15 @@ def run_cli(argv: list[str]) -> int:
             # 目录已存在是常态（反复重建站点），只有同名文件挡路才算错误。
             if out.exists() and not out.is_dir():
                 raise VibeError(f"--out 是目录模式，但这里已有一个文件：{out}")
-            if out == store:
+            if out in stores:
                 raise VibeError(f"站点目录不能就是 store 本身：{out}")
-            return _build_site(store, out)
+            return _build_site(stores, out)
         # 单页模式下已有文件只允许是 HTML，避免误覆盖别的产物。
         if out.exists() and out.is_file() and out.suffix.lower() not in (".html", ".htm"):
             raise VibeError(f"不能覆盖现有源文件：{out}")
 
+        if len(stores) > 1:
+            raise VibeError("单页模式只接一个 store；要看多个 store 请用站点模式（--out 给目录）")
         view = collect_book(store, session_id=flags.get("session"), run_id=flags.get("run"))
         html = render_book(view)
         out.parent.mkdir(parents=True, exist_ok=True)
