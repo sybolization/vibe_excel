@@ -213,6 +213,17 @@ def parse_conversation(
                 )
             for raw in as_list(content):
                 part = as_object(raw)
+                # 思考单独成块：页面默认折叠，点开才看
+                if part.get("type") == "thinking":
+                    thought = part.get("thinking")
+                    if isinstance(thought, str) and thought.strip():
+                        blocks.append(
+                            {
+                                "kind": "thinking", "at": at, "text": clip(thought, _CLIP_ASSISTANT),
+                                "name": "", "brief": "", "ok": True, "ms": None, "result": "",
+                            }
+                        )
+                    continue
                 if part.get("type") != "toolCall":
                     continue
                 block: ChatBlock = {

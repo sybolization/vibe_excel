@@ -160,9 +160,25 @@
   }
 
   /* ---------- 消息流 ---------- */
+  /* 失败时别把整行染红：灰行照旧，行尾挂一枚徽标，红点 + 一句原因。 */
+  const failLabel = (result) => {
+    const code = /exit code (\d+)/i.exec(result) ?? /退出码\s*(\d+)/.exec(result);
+    return code === null || code === undefined ? "失败" : `退出码 ${code[1]}`;
+  };
+
   function toolBlock(b) {
-    const mark = b.ok ? "✓" : "✕";
-    return `<details class="blk tool"><summary><span class="tn">${esc(b.name)}</span><span class="tb" title="${esc(b.brief)}">${esc(b.brief)}</span><span class="tok ${b.ok ? "ok" : "err"}">${mark}</span></summary>${b.result === "" ? "" : `<pre>${esc(b.result)}</pre>`}</details>`;
+    /* 一次调用就是一行灰字：名字和参数同色同粗细。
+       打勾打叉是噪音——没出错就是常态，不需要宣布。 */
+    const badge = b.ok ? "" : `<span class="fail"><span class="fd"></span>${esc(failLabel(b.result))}</span>`;
+    return `<details class="blk tool"><summary><span class="tn">${esc(b.name)}</span><span class="tb" title="${esc(b.brief)}">${esc(b.brief)}</span>${badge}</summary>${b.result === "" ? "" : `<pre>${esc(b.result)}</pre>`}</details>`;
+  }
+
+  /* 思考块：默认折叠，点开才看。它不属于「agent 说的话」，所以单独一块。 */
+  function thinkBlock(b) {
+    const first = String(b.text ?? "").trim().split("\n")[0].slice(0, 40);
+    /* 正在想的这一段要展开、带流光——折叠着看不出它在动；想完自动收回去。 */
+    const live = b.live === true;
+    return `<details class="blk think${live ? " live" : ""}"${live ? " open" : ""}><summary><span class="tt">思考</span><span class="tp">${esc(first)}</span></summary><div class="thinkbody">${esc(b.text ?? "").replace(/\n/g, "<br>")}</div></details>`;
   }
 
   /* 服务端记在 store 里的输入变更事件：读页面的运行态，不靠这次会话的记忆。
@@ -209,6 +225,7 @@
           last = at;
         }
         if (b.kind === "tool") return stamp + toolBlock(b);
+        if (b.kind === "thinking") return stamp + thinkBlock(b);
   /* 输入变更这类系统事件：不冒充 agent 说的话，单独一种行。 */
         if (b.kind === "event") return stamp + `<div class="blk ev"><span class="evd"></span><span class="evt">${esc(b.text)}</span></div>`;
         if (b.kind === "user") return `${stamp}<div class="blk u"><div class="who">你</div><div class="body">${esc(b.text).replace(/\n/g, "<br>")}</div></div>`;
@@ -371,8 +388,11 @@
     input.value = "";
     input.style.height = "auto";
     syncSend();
-    const pending = { kind: "event", at: new Date().toISOString(), text: "等模型回答…" };
-    thread.blocks.push(pending);
+    const at = new Date().toISOString();
+    /* 两块现场长出来：思考（默认折叠）与回答（逐字填）。 */
+    const thought = { kind: "thinking", at, text: "", live: true };
+    const answer = { kind: "assistant", at, text: "" };
+    thread.blocks.push(thought, answer);
     state.sending = true;
     paint();
     if (!state.open) {
@@ -380,13 +400,46 @@
       paintRail();
     }
     if (!ids.live) {
-      pending.text = "发送需要从 start.ps1 启动服务";
+      thread.blocks.splice(-2, 2, { kind: "event", at, text: "发送需要从 start.ps1 启动服务" });
       state.sending = false;
       paint();
       return;
     }
+
+    /* 只重画正在长的那两块：整段重绘会让滚动位置和折叠状态一直跳 */
+    const liveNodes = () => ({
+      think: [...body.querySelectorAll(".blk.think .thinkbody")].pop() ?? null,
+      thinkHeader: [...body.querySelectorAll(".blk.think .tp")].pop() ?? null,
+      answer: [...body.querySelectorAll(".blk.a .body")].pop() ?? null,
+    });
+    /* 想完了：把流光和展开收掉，它就该安静地待在回答上面 */
+    const settleThought = () => {
+      if (thought.live !== true) return;
+      thought.live = false;
+      const node = [...body.querySelectorAll(".blk.think")].pop();
+      if (node !== null && node !== undefined) {
+        node.classList.remove("live");
+        node.removeAttribute("open");
+      }
+    };
+    let frame = 0;
+    const repaint = () => {
+      if (frame !== 0) return;
+      frame = requestAnimationFrame(() => {
+        frame = 0;
+        const nodes = liveNodes();
+        if (thought.text !== "" && nodes.think !== null) {
+          nodes.think.innerHTML = esc(thought.text).replace(/\n/g, "<br>");
+          if (nodes.thinkHeader !== null) {
+            nodes.thinkHeader.textContent = thought.text.trim().split("\n")[0].slice(0, 40);
+          }
+        }
+        if (nodes.answer !== null) nodes.answer.innerHTML = renderMd(answer.text) || "…";
+      });
+    };
+
     try {
-      const response = await fetch("/api/chat/send", {
+      const response = await fetch("/api/chat/stream", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -397,17 +450,53 @@
           text,
         }),
       });
-      const data = await response.json();
-      if (data.ok === true) {
-        thread.id = data.conversationId || thread.id;
-        thread.end = new Date().toISOString();
-        pending.kind = "assistant";
-        pending.text = data.reply;
-      } else {
-        pending.text = `没问成：${data.error || "未知原因"}`;
+      if (!response.ok || response.body === null) {
+        const detail = await response.text().catch(() => "");
+        throw new Error(detail.slice(0, 120) || `HTTP ${response.status}`);
+      }
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+      let failure = "";
+      for (;;) {
+        const chunk = await reader.read();
+        if (chunk.done) break;
+        buffer += decoder.decode(chunk.value, { stream: true });
+        let cut = buffer.indexOf("\n");
+        while (cut >= 0) {
+          const line = buffer.slice(0, cut).trim();
+          buffer = buffer.slice(cut + 1);
+          cut = buffer.indexOf("\n");
+          if (line === "") continue;
+          let event = null;
+          try { event = JSON.parse(line); } catch { continue; }
+          if (event.type === "thinking") {
+            thought.text += event.delta;
+            repaint();
+          } else if (event.type === "text") {
+            answer.text += event.delta;
+            settleThought();
+            repaint();
+          } else if (event.type === "done") {
+            thread.id = event.conversationId || thread.id;
+            thread.end = new Date().toISOString();
+          } else if (event.type === "error") {
+            failure = event.error || "未知原因";
+          }
+        }
+      }
+      settleThought();
+      if (failure !== "") {
+        thread.blocks.splice(thread.blocks.indexOf(answer), 1);
+        thread.blocks.splice(thread.blocks.indexOf(thought) + 1, 0, { kind: "event", at, text: `没问成：${failure}` });
+        if (thought.text === "") thread.blocks.splice(thread.blocks.indexOf(thought), 1);
+      } else if (answer.text === "") {
+        thread.blocks.splice(thread.blocks.indexOf(answer), 1);
+        if (thought.text === "") thread.blocks.splice(thread.blocks.indexOf(thought), 1);
       }
     } catch (error) {
-      pending.text = `没问成：${error.message}`;
+      thread.blocks.splice(thread.blocks.indexOf(answer), 1);
+      thread.blocks.push({ kind: "event", at, text: `没问成：${error.message}` });
     }
     state.sending = false;
     paint();

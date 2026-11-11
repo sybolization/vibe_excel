@@ -20,7 +20,7 @@ import sys
 import threading
 import urllib.error
 import urllib.request
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -167,13 +167,20 @@ def pick_conversation(directory: Path, conversation_id: str | None) -> Path:
     return directory / f"{stamp}_chat.jsonl"
 
 
-def append_message(path: Path, role: str, text: str) -> None:
-    """按 pi 的记录格式追加一条消息；一份文件就是一段对话。"""
+def append_message(path: Path, role: str, text: str, *, thinking: str = "") -> None:
+    """按 pi 的记录格式追加一条消息；一份文件就是一段对话。
+
+    回答先写 thinking 再写 text，和 pi 自己写的一致；页面据此分块，刷新后仍然分块。
+    """
     path.parent.mkdir(parents=True, exist_ok=True)
+    content: list[dict[str, str]] = []
+    if thinking:
+        content.append({"type": "thinking", "thinking": thinking})
+    content.append({"type": "text", "text": text})
     record = {
         "type": "message",
         "timestamp": _timestamp(),
-        "message": {"role": role, "content": [{"type": "text", "text": text}]},
+        "message": {"role": role, "content": content},
     }
     with _WRITE_LOCK, path.open("a", encoding="utf-8", newline="\n") as handle:
         handle.write(json.dumps(record, ensure_ascii=False) + "\n")
@@ -310,6 +317,85 @@ def ask_pi(config: ChatConfig, messages: list[dict[str, str]]) -> str:
     return text
 
 
+def _pi_argv(config: ChatConfig, system: str, prompt: str, *, mode: str) -> list[str]:
+    argv = [*_pi_command(Path(config.cli)), "-p", "--no-session", "--no-tools"]
+    argv += ["--provider", config.provider, "--model", config.model, "--mode", mode]
+    if system:
+        argv += ["--system-prompt", system]
+    argv.append(prompt)
+    return argv
+
+
+def stream_events(config: ChatConfig, messages: list[dict[str, str]]) -> Iterator[dict[str, str]]:
+    """边跑边吐增量：thinking 一段、text 一段，最后一条是 reply。
+
+    页面要的是「分块、可展开的思考」和「逐字出现的回答」，所以不能等整段跑完再返回。
+    """
+    ready, reason = probe(config)
+    if not ready:
+        raise VibeError(reason)
+    if config.backend != "pi":
+        # http 后端没有增量，退化成一次性：先给一段 text，再给 reply
+        text = ask(config, messages)
+        yield {"type": "text", "delta": text}
+        yield {"type": "reply", "text": text, "thinking": ""}
+        return
+
+    system, prompt = _flatten(messages)
+    argv = _pi_argv(config, system, prompt, mode="json")
+    process = subprocess.Popen(  # noqa: S603 - 参数是我们自己拼的，没有 shell
+        argv,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        bufsize=1,
+        env={**os.environ},
+    )
+    think_parts: list[str] = []
+    text_parts: list[str] = []
+    try:
+        assert process.stdout is not None
+        for line in process.stdout:
+            trimmed = line.strip()
+            if not trimmed:
+                continue
+            try:
+                record = json.loads(trimmed)
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(record, dict) or record.get("type") != "message_update":
+                continue
+            event = record.get("assistantMessageEvent")
+            if not isinstance(event, dict):
+                continue
+            kind = event.get("type")
+            delta = event.get("delta")
+            if not isinstance(delta, str) or delta == "":
+                continue
+            if kind == "thinking_delta":
+                think_parts.append(delta)
+                yield {"type": "thinking", "delta": delta}
+            elif kind == "text_delta":
+                text_parts.append(delta)
+                yield {"type": "text", "delta": delta}
+    finally:
+        try:
+            process.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            process.kill()
+    answer = "".join(text_parts).strip()
+    if process.returncode not in (0, None) and answer == "":
+        detail = ""
+        if process.stderr is not None:
+            detail = process.stderr.read().strip()[:200]
+        raise VibeError(f"模型没有回答：{detail or f'退出码 {process.returncode}'}")
+    if answer == "":
+        raise VibeError("模型没有说什么")
+    yield {"type": "reply", "text": answer, "thinking": "".join(think_parts).strip()}
+
+
 def ask(config: ChatConfig, messages: list[dict[str, str]]) -> str:
     """问一次模型；失败时把能看的原因抛出去，不要静默。"""
     ready, reason = probe(config)
@@ -343,6 +429,45 @@ def ask(config: ChatConfig, messages: list[dict[str, str]]) -> str:
     if not isinstance(text, str) or not text.strip():
         raise VibeError("模型返回了空内容")
     return text.strip()
+
+
+def send_stream(
+    store: Path,
+    session_id: str,
+    program: str,
+    text: str,
+    *,
+    conversation_id: str | None = None,
+    new: bool = False,
+    events: Sequence[dict[str, Any]] = (),
+    context: dict[str, Any] | None = None,
+) -> Iterator[dict[str, str]]:
+    """流式版本：先落问题，再吐增量，最后落回答。
+
+    出错时问题已经留在文件里了——用户打完字凭空消失，比看到一条失败更糟。
+    """
+    clean = text.strip()
+    if not clean:
+        raise VibeError("说点什么再发")
+    directory = session_directory(store, session_id)
+    path = pick_conversation(directory, None if new else conversation_id)
+    append_message(path, "user", clean)
+    history = read_messages(path)
+    messages = [{"role": "system", "content": system_prompt(program, events, context)}, *history]
+    thinking = ""
+    answer = ""
+    try:
+        for event in stream_events(ChatConfig.from_env(), messages):
+            if event.get("type") == "reply":
+                answer = event.get("text", "")
+                thinking = event.get("thinking", "")
+                continue
+            yield event
+    except VibeError as error:
+        yield {"type": "error", "error": str(error)}
+        return
+    append_message(path, "assistant", answer, thinking=thinking)
+    yield {"type": "done", "conversationId": path.stem, "reply": answer}
 
 
 def send(

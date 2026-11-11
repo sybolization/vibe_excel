@@ -170,10 +170,12 @@ def _fake_pi(tmp_path: Path, body: str) -> Path:
     """一个假的 pi CLI：把它收到的参数和输出都写进一个文件，测得到底传了什么。"""
     scrap = tmp_path / "pi-args.txt"
     script = tmp_path / "fake_pi.py"
+    # 假 CLI 必须写 UTF-8 字节：Windows 控制台默认 cp936，父进程按 UTF-8 读会崩
     script.write_text(
         "import pathlib, sys\n"
         f"pathlib.Path({str(scrap)!r}).write_text('\\n'.join(sys.argv[1:]), encoding='utf-8')\n"
-        f"print({body!r})\n",
+        f"sys.stdout.buffer.write({body!r}.encode('utf-8'))\n"
+        "sys.stdout.buffer.flush()\n",
         encoding="utf-8",
     )
     return script
