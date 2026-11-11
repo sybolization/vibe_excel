@@ -14,6 +14,8 @@ from vibe_excel.book import (
     build_graph,
     build_inputs,
     collect_book,
+    conversation_title,
+    parse_conversation,
     parse_transcript,
     render_book,
 )
@@ -162,6 +164,39 @@ def test_transcript_ignores_incomplete_last_line() -> None:
     broken = f'{TRANSCRIPT}\n{{"type":"message","id":"x'
     assert parse_transcript("a.jsonl", broken, warnings=[])["records"] == 5
 
+
+
+def test_conversation_keeps_each_message_and_tool_result() -> None:
+    """逐条留消息；工具结果按 toolCallId 回填，缺结果的按成功算。"""
+    conversation = parse_conversation(
+        "C:\\s\\2026-11-04T08-11-20-122Z_abc.jsonl", TRANSCRIPT, warnings=[]
+    )
+    assert conversation is not None
+    assert conversation["title"] == "本次任务：按地点汇总"
+    assert [block["kind"] for block in conversation["blocks"]] == [
+        "user",
+        "assistant",
+        "tool",
+        "tool",
+        "tool",
+    ]
+    tools = [block for block in conversation["blocks"] if block["kind"] == "tool"]
+    assert [block["name"] for block in tools] == ["bash", "write", "edit"]
+    assert tools[0]["brief"] == "ls"
+    assert tools[0]["result"] == "ok"
+    assert tools[0]["ok"] is True
+    # 没有结果记录的工具（会话被中断）不能当成失败
+    assert tools[1]["ok"] is True
+    assert tools[1]["result"] == ""
+
+
+def test_conversation_title_strips_markdown_heading() -> None:
+    assert conversation_title("\ufeff## 标题\n正文") == "标题"
+    assert conversation_title("   ") == "未命名对话"
+
+
+def test_conversation_empty_text_returns_none() -> None:
+    assert parse_conversation("a.jsonl", "", warnings=[]) is None
 
 def test_transcript_returns_none_for_empty_file() -> None:
     """空文件返回 None。"""

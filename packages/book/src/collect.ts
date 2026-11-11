@@ -14,7 +14,8 @@ import { buildGraph } from "./graph.ts";
 import { buildDiagram } from "./diagram.ts";
 import { buildInputs } from "./inputs.ts";
 import type { BatchView, DbTableFact, RunRecord, SourceRef } from "./inputs.ts";
-import { parseTranscript } from "./transcript.ts";
+import { parseConversation, parseTranscript } from "./transcript.ts";
+import type { ConversationView } from "./types.ts";
 import type {
   BookView,
   EpisodeView,
@@ -119,10 +120,15 @@ function readAuthors(runRoot: string): AuthorRecord[] {
   return records;
 }
 
-function readEpisodes(store: string, sessionId: string, authors: AuthorRecord[]): EpisodeView[] {
+function readEpisodes(
+  store: string,
+  sessionId: string,
+  authors: AuthorRecord[],
+): { episodes: EpisodeView[]; conversations: ConversationView[] } {
   const dir = join(store, "sessions", sessionId, "sessions");
-  if (!existsSync(dir)) return [];
+  if (!existsSync(dir)) return { episodes: [], conversations: [] };
   const episodes: EpisodeView[] = [];
+  const conversations: ConversationView[] = [];
   for (const name of readdirSync(dir)) {
     if (!name.toLowerCase().endsWith(".jsonl")) continue;
     const file = join(dir, name);
@@ -134,18 +140,24 @@ function readEpisodes(store: string, sessionId: string, authors: AuthorRecord[])
     }
     const episode = parseTranscript(file, text);
     if (episode !== null) episodes.push(episode);
+    // 同一份文件再走一遍，这一次留逐条消息，给右侧对话区用
+    const conversation = parseConversation(file, text);
+    if (conversation !== null) conversations.push(conversation);
   }
   episodes.sort((a, b) => a.start.localeCompare(b.start));
-  return episodes;
+  // 新的在列表上面
+  conversations.sort((a, b) => b.end.localeCompare(a.end));
+  return { episodes, conversations };
 }
 
-function readTableStat(db: DatabaseSync, name: string): TableStat {
+function readTableStat(db: DatabaseSync, name: string, warnings: string[]): TableStat {
   try {
     const counted = all<{ n: number }>(db, `select count(*) as n from ${quoteIdent(name)}`);
     const rows = counted.length > 0 ? counted[0]?.n ?? null : null;
     const columns = all<{ name: string }>(db, `select name from pragma_table_info(?)`, name).length;
     return { rows, columns };
-  } catch {
+  } catch (error) {
+    warnings.push(`读不到表 ${name} 的行列数：${error instanceof Error ? error.message : String(error)}`);
     return { rows: null, columns: null };
   }
 }
@@ -282,11 +294,11 @@ function readSources(db: DatabaseSync, name: string): SourceRef[] {
   }
 }
 
-function readDbFacts(db: DatabaseSync): DbTableFact[] {
+function readDbFacts(db: DatabaseSync, warnings: string[]): DbTableFact[] {
   const facts: DbTableFact[] = [];
   for (const row of all<{ name: string }>(db, "select name from sqlite_master where type = 'table'")) {
     if (row.name.startsWith("sqlite_")) continue;
-    const stat = readTableStat(db, row.name);
+    const stat = readTableStat(db, row.name, warnings);
     facts.push({ name: row.name, rows: stat.rows, columns: stat.columns, sources: readSources(db, row.name) });
   }
   return facts;
@@ -316,6 +328,7 @@ function readInputs(
   reads: string[],
   writes: string[],
   snapshot: string | null,
+  warnings: string[],
 ): InputsView {
   const workDir = join(store, "sessions", sessionId, "work");
   const batches = readBatches(workDir);
@@ -342,7 +355,7 @@ function readInputs(
     return buildInputs({
       batch,
       dbPath,
-      tables: readDbFacts(db),
+      tables: readDbFacts(db, warnings),
       runs: runDocs,
       reads,
       writes,
@@ -363,7 +376,7 @@ interface FocusResult {
 }
 
 /** 读选中运行：run.json → 图；顺带量一下每张表的行数与产出表的前几行。 */
-function readFocus(store: string, sessionId: string, run: RunRow): FocusResult {
+function readFocus(store: string, sessionId: string, run: RunRow, warnings: string[]): FocusResult {
   const empty: FocusResult = {
     graph: null,
     revision: run.data_revision_id,
@@ -396,7 +409,7 @@ function readFocus(store: string, sessionId: string, run: RunRow): FocusResult {
   }
 
   if (db !== null) {
-    for (const name of names) tables[name] = readTableStat(db, name);
+    for (const name of names) tables[name] = readTableStat(db, name, warnings);
   } else {
     // 没有库可读时，退回 run.json 自己记的行数（物化与产出才有）
     const rounds = asObject(doc["rounds"]);
@@ -438,6 +451,7 @@ export function collectBook(options: CollectOptions): BookView {
   }
 
   const db = openReadOnly(controlPath);
+  const warnings: string[] = [];
   try {
     const sessions = all<Json>(db, "select * from sessions order by updated_at desc");
     const chosen =
@@ -482,7 +496,7 @@ export function collectBook(options: CollectOptions): BookView {
       if (author.commit !== null) authorByCommit.set(author.commit, author);
     }
 
-    const episodes = readEpisodes(store, sessionId, authors);
+    const { episodes, conversations } = readEpisodes(store, sessionId, authors);
     const episodeByFile = new Map<string, EpisodeView>();
     for (const episode of episodes) episodeByFile.set(basename(episode.file), episode);
     for (const author of authors) {
@@ -499,7 +513,7 @@ export function collectBook(options: CollectOptions): BookView {
       ? runRows
       : runRows.filter((run) => run.id === options.runId);
     for (const run of candidates) {
-      const result = readFocus(store, sessionId, run);
+      const result = readFocus(store, sessionId, run, warnings);
       if (options.runId !== undefined) {
         focus = run;
         focusResult = result;
@@ -569,6 +583,7 @@ export function collectBook(options: CollectOptions): BookView {
       focusResult?.graph?.nodes.flatMap((node) => node.reads) ?? [],
       focusResult?.graph?.nodes.flatMap((node) => node.writes) ?? [],
       revisionsRows[0]?.path ?? null,
+      warnings,
     );
 
     return {
@@ -591,6 +606,8 @@ export function collectBook(options: CollectOptions): BookView {
       diagram: buildDiagram({ inputs, graph: focusResult?.graph ?? null }),
       transcript: episodes,
       focusEpisode,
+      conversations,
+      warnings,
     };
   } finally {
     db.close();

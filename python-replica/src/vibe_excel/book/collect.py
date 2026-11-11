@@ -18,13 +18,14 @@ from ._values import as_list, as_number, as_object, as_text, basename, first_rou
 from .diagram import build_diagram
 from .graph import build_graph
 from .inputs import build_inputs
-from .transcript import parse_transcript
+from .transcript import parse_conversation, parse_transcript
 from .types import (
     BatchFile,
     BatchView,
     BookView,
     Cell,
     CollectOptions,
+    ConversationView,
     DbTableFact,
     EpisodeView,
     GraphView,
@@ -280,9 +281,16 @@ def _read_authors(run_root: Path, warnings: list[str]) -> list[_Author]:
     return records
 
 
-def _read_episodes(directory: Path, warnings: list[str]) -> list[EpisodeView]:
-    """读取目录下所有 JSONL 对话，并按开始时间排序。"""
+def _read_episodes(
+    directory: Path, warnings: list[str]
+) -> tuple[list[EpisodeView], list[ConversationView]]:
+    """读取目录下所有 JSONL 对话。
+
+    返回两份：片段摘要（按开始时间正序）与逐条消息的对话（新的在前）。
+    同一份文件只读一次，两种视图各走一遍解析。
+    """
     episodes: list[EpisodeView] = []
+    conversations: list[ConversationView] = []
     for file in _entries(directory, warnings, "对话目录"):
         if file.suffix.lower() != ".jsonl" or not file.is_file():
             continue
@@ -295,7 +303,13 @@ def _read_episodes(directory: Path, warnings: list[str]) -> list[EpisodeView]:
         episode = parse_transcript(file, text, warnings=warnings)
         if episode is not None:
             episodes.append(episode)
-    return sorted(episodes, key=lambda episode: episode["start"])
+        conversation = parse_conversation(file, text, warnings=warnings)
+        if conversation is not None:
+            conversations.append(conversation)
+    return (
+        sorted(episodes, key=lambda episode: episode["start"]),
+        sorted(conversations, key=lambda conversation: conversation["end"], reverse=True),
+    )
 
 
 def _read_run_docs(run_root: Path, runs: list[_Run], warnings: list[str]) -> list[RunRecord]:
@@ -586,7 +600,7 @@ def collect_book(
         raise VibeError(f"会话「{chosen_id}」里找不到运行「{run_id}」")
     run_root = store_path / "sessions" / chosen_id / "runs"
     authors = _read_authors(run_root, warnings)
-    episodes = _read_episodes(store_path / "sessions" / chosen_id / "sessions", warnings)
+    episodes, conversations = _read_episodes(store_path / "sessions" / chosen_id / "sessions", warnings)
     run_docs = _read_run_docs(run_root, run_rows, warnings)
     docs_by_id = {record["id"]: record["doc"] for record in run_docs}
     commit_to_run: dict[str, str] = {}
@@ -689,6 +703,7 @@ def collect_book(
         "lastRunRevision": focus_result.revision if focus_result is not None else None,
         "runs": runs, "publishes": publishes, "graph": graph, "inputs": inputs,
         "diagram": build_diagram(inputs=inputs, graph=graph), "transcript": episodes,
+        "conversations": conversations,
         "focusEpisode": focus_episode["id"] if focus_episode is not None else None,
         "warnings": warnings,
     }

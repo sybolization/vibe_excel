@@ -1,92 +1,184 @@
-/* book 的前端：一张可以拖动和缩放的图纸 + 一条底栏。只认 #book-data 里的视图模型，不碰磁盘。 */
+/* 样张：左侧「来源」托盘 + 玻璃 chrome，画布沿用现在的排法。 */
 (() => {
-  const DATA = JSON.parse(document.getElementById("book-data").textContent);
-  const root = document.getElementById("root");
+  const V = JSON.parse(document.getElementById("book-data").textContent);
+  const D = V.diagram;
+  /* 画布只画骨架：文件 → sheet → 机器 → 产物。
+     原料表并进它的 sheet（sheet 卡片上多一行「产出：表名」），
+     中间产物并成机器→机器的一条边，孤儿表不入图。 */
+  const R = reduceDiagram(D === null ? { nodes: [], edges: [] } : D);
+  const N = R.nodes;
+  const E = R.edges;
+  const G = V.graph;
+  const I = V.inputs;
+  const q = new URLSearchParams(location.search);
+  /* 主题：?t= 显式指定则听它；否则跟随系统。默认浅色。 */
+  const forcedTheme = q.get("t");
+  const prefersDark = window.matchMedia !== undefined && window.matchMedia("(prefers-color-scheme: dark)").matches;
+  document.documentElement.dataset.theme = forcedTheme === "dark" || (forcedTheme === null && prefersDark) ? "dark" : "light";
 
-  const esc = (value) =>
-    String(value ?? "").replace(/[&<>"']/g, (ch) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[ch]));
+  const esc = (v) => String(v ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+  const num = (n) => (n === null || n === undefined ? "—" : Number(n).toLocaleString("en-US"));
+  const dur = (v) => (v === null || v === undefined ? "—" : v < 1000 ? `${Math.round(v)} ms` : `${(v / 1000).toFixed(1)} s`);
+  const kb = (n) => (n === null || n === undefined ? "—" : n < 1048576 ? `${Math.round(n / 1024)} KB` : `${Math.round(n / 1048576)} MB`);
+  const short = (v) => (v ? String(v).slice(0, 8) : "—");
 
-  const pad = (n) => String(n).padStart(2, "0");
-  /** 设备里有些时间戳是文件名格式（2026-10-30T01-44-23-838Z），先掰回 ISO 再解析。 */
-  const parseStamp = (iso) => {
-    const text = String(iso).replace(/^(.*T\d{2})-(\d{2})-(\d{2})-(\d{3})Z$/, "$1:$2:$3.$4Z");
-    const date = new Date(text);
-    return Number.isNaN(date.getTime()) ? null : date;
-  };
-  const fmtTime = (iso) => {
-    if (!iso) return "—";
-    const date = parseStamp(iso);
-    if (date === null) return "—";
-    const now = new Date();
-    const sameYear = date.getFullYear() === now.getFullYear();
-    const hm = `${pad(date.getHours())}:${pad(date.getMinutes())}`;
-    return sameYear ? `${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${hm}` : `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
-  };
-  const fmtNum = (n) => (n === null || n === undefined ? "—" : Number(n).toLocaleString("en-US"));
-  const fmtDur = (ms) => (ms === null || ms === undefined ? "—" : ms < 1000 ? `${Math.round(ms)} ms` : `${(ms / 1000).toFixed(1)} s`);
-  const fmtBytes = (n) => {
-    if (n === null || n === undefined) return "—";
-    if (n < 1024) return `${n} B`;
-    if (n < 1048576) return `${Math.round(n / 1024)} KB`;
-    return `${Math.round(n / 1048576)} MB`;
-  };
-  const short = (value) => (value ? String(value).slice(0, 8) : "—");
-  const baseName = (path) => (path ? String(path).split(/[\\/]/).pop() : null);
-
-  const inputs = DATA.inputs;
-  const graph = DATA.graph;
-  const diagram = DATA.diagram;
-  const nodes = diagram === null ? [] : diagram.nodes;
-  const edges = diagram === null ? [] : diagram.edges;
-  const nodeIndex = new Map(nodes.map((node, index) => [node.id, index]));
-  const dbRef = baseName(inputs === null ? null : inputs.dbPath) ?? "db";
-
-  /* ---------------- 索引 ---------------- */
-  const tableRows = new Map();
-  for (const file of inputs === null ? [] : inputs.files) {
-    for (const row of file.direct.concat(file.derived)) tableRows.set(row.name, { row, file });
+  /* 中文名表：标签 → 中文。没有就回落到标签本身。 */
+  const cnOf = new Map();
+  for (const n of N) if (n.name !== undefined && n.name !== "") cnOf.set(n.label, n.name);
+  const show = (v) => cnOf.get(v) ?? v;
+  const byId = new Map(N.map((n) => [n.id, n]));
+  const idx = new Map(N.map((n, i) => [n.id, i]));
+  const downs = new Map();
+  for (const e of E) {
+    if (!downs.has(e.from)) downs.set(e.from, []);
+    downs.get(e.from).push(byId.get(e.to));
   }
-  for (const row of inputs === null ? [] : inputs.orphans) {
-    if (!tableRows.has(row.name)) tableRows.set(row.name, { row, file: null });
-  }
-  const fileRows = new Map((inputs === null ? [] : inputs.files).map((file) => [file.name, file]));
-  const nodeByFn = new Map();
-  for (const node of graph === null ? [] : graph.nodes) nodeByFn.set(node.fn, node);
 
-  const state = { sel: null, tab: "run", chips: [], text: "" };
+  /* 四种剪影，不再是一个宽度乘四份。文件竖着（纸是竖的）、sheet 窄（一页夹签）、
+     表横（表是横的）、机器只是一枚环骑在线上。
+     长宽比按各自的内容定，不追求统一——统一才是"长条"和"单调"的来源。 */
+  const WID = { file: 176, sheet: 154, table: 156, compute: 150 };
+  const HT = { file: 68, sheet: 60, table: 60, compute: 54 };
+  const RING_CY = 8; // 环心距节点顶端的距离；连线从这里穿过
+  const GAP = 58;
+  const ROW = 40;
 
-  /* ---------------- 排版 ---------------- */
-  const WID = { file: 196, sheet: 156, table: 196, compute: 176 };
-  const HT = { file: 44, sheet: 28, table: 28, compute: 40 };
-  const ROW = 46;
-  const GAP = 48;
 
-  function layout(view) {
-    const rankWidth = new Map();
-    for (const node of view.nodes) rankWidth.set(node.rank, Math.max(rankWidth.get(node.rank) ?? 0, WID[node.kind]));
-    const ranks = [...rankWidth.keys()].sort((a, b) => a - b);
-    const colX = new Map();
-    let cursorX = 0;
-    for (const rank of ranks) {
-      colX.set(rank, cursorX);
-      cursorX += (rankWidth.get(rank) ?? 0) + GAP;
-    }
-    const width = Math.max(0, cursorX - GAP);
-
-    const parents = new Map();
-    for (const edge of view.edges) {
-      if (!parents.has(edge.to)) parents.set(edge.to, []);
-      parents.get(edge.to).push(edge.from);
+  function reduceDiagram(d) {
+    const nodes = d.nodes ?? [];
+    const edges = d.edges ?? [];
+    const ins = new Map();
+    const outs = new Map();
+    for (const e of edges) {
+      if (!ins.has(e.to)) ins.set(e.to, []);
+      if (!outs.has(e.from)) outs.set(e.from, []);
+      ins.get(e.to).push(e);
+      outs.get(e.from).push(e);
     }
 
-    const pos = new Map();
-    for (const rank of ranks) {
-      const list = view.nodes.filter((node) => node.rank === rank);
-      const want = new Map();
-      for (const node of list) {
-        const ups = (parents.get(node.id) ?? []).map((id) => pos.get(id)).filter((item) => item !== undefined);
-        want.set(node.id, ups.length === 0 ? null : ups.reduce((sum, item) => sum + item.y + item.h / 2, 0) / ups.length);
+    const tables = nodes.filter((n) => n.kind === "table");
+    const madeBy = new Map();     // 原料表 ← 哪个 sheet
+    const writtenBy = new Map();  // 任何表 ← 哪台机器
+    for (const t of tables) {
+      const make = (ins.get(t.id) ?? []).find((e) => e.kind === "make");
+      if (make !== undefined) madeBy.set(t.id, make.from);
+      const write = (ins.get(t.id) ?? []).find((e) => e.kind === "write");
+      if (write !== undefined) writtenBy.set(t.id, write.from);
+    }
+
+    const folded = new Set();
+    const sheetOut = new Map();
+    for (const t of tables) {
+      if (madeBy.has(t.id)) {
+        /* 原料表：并进 sheet */
+        folded.add(t.id);
+        sheetOut.set(madeBy.get(t.id), t);
+        continue;
       }
+      if (!writtenBy.has(t.id)) {
+        /* 既没来源也没 writer：孤儿，不入图 */
+        folded.add(t.id);
+        continue;
+      }
+      const consumed = (outs.get(t.id) ?? []).some((e) => e.kind === "read");
+      if (consumed) folded.add(t.id); // 中间产物：并成机器直连
+    }
+
+    const kept = nodes.filter((n) => !folded.has(n.id));
+    const keptIds = new Set(kept.map((n) => n.id));
+
+    /* 边：原样的保留；落在被收起表上的，把端点换掉 */
+    const mapped = [];
+    const push = (from, to, kind, run) => {
+      if (from === to || !keptIds.has(from) || !keptIds.has(to)) return;
+      mapped.push({ from, to, kind, run });
+    };
+    const writerOf = (tableId) => writtenBy.get(tableId) ?? null;
+    const sheetOf = (tableId) => madeBy.get(tableId) ?? null;
+
+    for (const e of edges) {
+      switch (e.kind) {
+        case "contain": // 文件 → sheet
+        case "write":   // 机器 → 表（产物保留；中间/原料已被收起）
+          push(e.from, e.to, e.kind, e.run);
+          break;
+        case "make":    // sheet → 原料表：收进 sheet 卡片，不成边
+          break;
+        case "read": {  // 表 → 机器：换成它的来源
+          const from = sheetOf(e.from) ?? writerOf(e.from);
+          if (from !== null) push(from, e.to, "read", e.run);
+          break;
+        }
+        default:
+          push(e.from, e.to, e.kind, e.run);
+      }
+    }
+
+    /* 去重（同一个端点只留一条），并去掉被收起链条造成的重复 */
+    const seen = new Set();
+    const reducedEdges = [];
+    for (const e of mapped) {
+      const key = e.from + "\u0000" + e.to;
+      if (seen.has(key)) {
+        const prev = reducedEdges.find((x) => x.from + "\u0000" + x.to === key);
+        if (prev !== undefined && e.run === true) prev.run = true;
+        continue;
+      }
+      seen.add(key);
+      reducedEdges.push(e);
+    }
+
+    /* 按收起的图重算 rank */
+    const rank = new Map(kept.map((n) => [n.id, 0]));
+    for (let pass = 0; pass < kept.length; pass += 1) {
+      let changed = false;
+      for (const e of reducedEdges) {
+        const a = rank.get(e.from);
+        const b = rank.get(e.to);
+        if (a === undefined || b === undefined) continue;
+        if (b < a + 1) {
+          rank.set(e.to, a + 1);
+          changed = true;
+        }
+      }
+      if (!changed) break;
+    }
+
+    const reducedNodes = kept.map((n) => {
+      const out = sheetOut.get(n.id);
+      return {
+        ...n,
+        rank: rank.get(n.id) ?? 0,
+        out: out === undefined ? null : { label: out.label, name: out.name ?? "" },
+      };
+    });
+
+    return { nodes: reducedNodes, edges: reducedEdges };
+  }
+
+  function layout() {
+    const rankW = new Map();
+    for (const n of N) rankW.set(n.rank, Math.max(rankW.get(n.rank) ?? 0, WID[n.kind]));
+    const ranks = [...rankW.keys()].sort((a, b) => a - b);
+    const colX = new Map();
+    let x = 0;
+    for (const r of ranks) {
+      colX.set(r, x);
+      x += rankW.get(r) + GAP;
+    }
+    const parents = new Map();
+    for (const e of E) {
+      if (!parents.has(e.to)) parents.set(e.to, []);
+      parents.get(e.to).push(e.from);
+    }
+    const pos = new Map();
+    const mid = (ids) => {
+      const ys = ids.map((id) => pos.get(id)).filter(Boolean).map((p) => p.y + p.h / 2);
+      return ys.length === 0 ? null : ys.reduce((a, b) => a + b, 0) / ys.length;
+    };
+    for (const r of ranks) {
+      const list = N.filter((n) => n.rank === r);
+      const want = new Map(list.map((n) => [n.id, mid(parents.get(n.id) ?? [])]));
       list.sort((a, b) => {
         const wa = want.get(a.id);
         const wb = want.get(b.id);
@@ -95,511 +187,556 @@
         if (wb === null) return -1;
         return wa - wb;
       });
-      let cursorY = 0;
-      for (const node of list) {
-        const w = WID[node.kind];
-        const h = HT[node.kind];
-        const probe = want.get(node.id);
-        const y = Math.max(cursorY, probe === null ? cursorY : probe - h / 2);
-        pos.set(node.id, { x: colX.get(rank) + (rankWidth.get(rank) - w) / 2, y, w, h });
-        cursorY = y + Math.max(ROW, h + 14);
+      let y = 0;
+      for (const n of list) {
+        const w = WID[n.kind];
+        const h = HT[n.kind];
+        const wv = want.get(n.id);
+        const yy = Math.max(y, wv === null ? y : wv - h / 2);
+        pos.set(n.id, {
+          x: colX.get(r) + (rankW.get(r) - w) / 2,
+          y: yy,
+          w,
+          h,
+          cy: n.kind === "compute" ? RING_CY : h / 2,
+          /* 机器的"接线柱"是那枚环本身，不是这个隐形盒子的右边。
+             连线接到环上，才像一颗珠子穿在线上，而不是悬空断掉。 */
+          xl: n.kind === "compute" ? colX.get(r) + (rankW.get(r) - w) / 2 + w / 2 - 8 : undefined,
+          xr: n.kind === "compute" ? colX.get(r) + (rankW.get(r) - w) / 2 + w / 2 + 8 : undefined,
+        });
+        y = yy + Math.max(ROW, h + 18);
       }
     }
-
     let minY = Infinity;
     let maxY = -Infinity;
-    for (const item of pos.values()) {
-      minY = Math.min(minY, item.y);
-      maxY = Math.max(maxY, item.y + item.h);
+    for (const p of pos.values()) {
+      minY = Math.min(minY, p.y);
+      maxY = Math.max(maxY, p.y + p.h);
     }
-    if (!Number.isFinite(minY)) {
-      minY = 0;
-      maxY = 0;
-    }
-    for (const item of pos.values()) item.y -= minY;
-    return { pos, width, height: maxY - minY };
+    for (const p of pos.values()) p.y -= minY;
+    return { pos, width: x - GAP, height: maxY - minY };
   }
 
-  const L = diagram === null ? { pos: new Map(), width: 0, height: 0 } : layout(diagram);
+  const L = D === null ? { pos: new Map(), width: 0, height: 0 } : layout();
 
-  function edgePath(a, b) {
-    const x1 = a.x + a.w;
-    const y1 = a.y + a.h / 2;
-    const x2 = b.x;
-    const y2 = b.y + b.h / 2;
+  /* 连线接到每个节点的"轴"上：卡片是垂直中线，机器是那枚环的圆心。 */
+  const axisY = (p) => p.y + (p.cy === undefined ? p.h / 2 : p.cy);
+
+  const edgePath = (a, b) => {
+    const x1 = a.xr === undefined ? a.x + a.w : a.xr;
+    const y1 = axisY(a);
+    const x2 = b.xl === undefined ? b.x : b.xl;
+    const y2 = axisY(b);
     if (Math.abs(y1 - y2) < 0.6) return `M${x1} ${y1}H${x2}`;
     const xm = Math.round((x1 + x2) / 2);
     return `M${x1} ${y1}H${xm}V${y2}H${x2}`;
-  }
+  };
 
-  /* ---------------- 节点 ---------------- */
-  function subOf(node) {
-    if (node.kind === "file") return fmtBytes(node.bytes);
-    if (node.rows === null) return "";
-    if (node.kind === "sheet") return `${fmtNum(node.rows)} 行`;
-    return `${fmtNum(node.rows)}×${node.columns === null ? "?" : node.columns}`;
-  }
+  const subOf = (n) => (n.kind === "file" ? kb(n.bytes) : n.rows === null ? "" : n.kind === "sheet" ? `${num(n.rows)} 行` : `${num(n.rows)}×${n.columns === null ? "?" : n.columns}`);
 
-  function nodeHtml(node, index) {
-    const item = L.pos.get(node.id);
-    if (item === undefined) return "";
-    const cls = [
-      "nd",
-      node.kind === "file" ? "f" : node.kind === "sheet" ? "s" : node.kind === "compute" ? "c" : "t",
-      node.run ? "run" : "",
-      node.loose ? "loose" : "",
-      state.sel === index ? "sel" : "",
-    ].filter(Boolean).join(" ");
-    const style = `left:${Math.round(item.x)}px;top:${Math.round(item.y)}px;width:${item.w}px;height:${item.h}px`;
-    const menu = `<div class="menu"><button data-act="copy" data-i="${index}">复制引用</button><button data-act="add" data-i="${index}">加到聊天框</button></div>`;
-    if (node.kind === "compute") {
-      const dur = node.elapsedMs === null ? "" : `<span class="dur">${esc(fmtDur(node.elapsedMs))}</span>`;
-      const loc = node.file === null ? "" : `<div class="lo">${esc(baseName(node.file))}</div>`;
-      return `<div class="${cls}" style="${style}" data-i="${index}"><div class="hd"><span class="fn">${esc(node.label)}</span>${dur}</div>${loc}${menu}</div>`;
+  function nodeHtml(n) {
+    const p = L.pos.get(n.id);
+    if (p === undefined) return "";
+    const i = idx.get(n.id);
+    const st = `left:${Math.round(p.x)}px;top:${Math.round(p.y)}px;width:${p.w}px;height:${p.h}px`;
+    const cls = `nd ${n.kind === "file" ? "f" : n.kind === "sheet" ? "s" : n.kind === "compute" ? "c" : "t"}${n.run ? " run" : ""}${n.loose ? " loose" : ""}`;
+    if (n.kind === "compute") {
+      const tip = n.file === null ? n.label : `${n.label} · ${n.file.split(/[\\/]/).pop()}`;
+      const cn = n.name === undefined || n.name === "" ? n.label : n.name;
+      /* 中文名和标识符都要：名字在上，英文标识与耗时在下，用一条 · 串起来。
+         还没有中文名时只留耗时，不然同一行会重复同一个词。 */
+      /* 有中文名时，英文标识只放 tooltip：画布上要读的是「这一步做什么」，
+         函数名在底栏的运行路径里已经有了，不必在每颗环下面再抄一遍。 */
+      const meta = dur(n.elapsedMs);
+      return `<div class="${cls}" style="${st}" data-i="${i}" title="${esc(tip)}"><span class="ring"></span><span class="cap"><span class="cn">${esc(cn)}</span><span class="meta">${esc(meta)}</span></span></div>`;
     }
-    return `<div class="${cls}" style="${style}" data-i="${index}"><span class="nm" title="${esc(node.label)}">${esc(node.label)}</span><span class="x">${esc(subOf(node))}</span>${menu}</div>`;
+    const cn = n.name === undefined || n.name === "" ? n.label : n.name;
+    const tip = cn === n.label ? n.label : `${cn} · ${n.label}`;
+    /* sheet 上多挂一行「造出哪张表」：原料表不再是卡片，但它不能凭空消失。 */
+    const out = n.out === null || n.out === undefined ? "" : `<span class="out" title="${esc(n.out.label)}">→ ${esc(n.out.name === "" ? n.out.label : n.out.name)}</span>`;
+    return `<div class="${cls}" style="${st}" data-i="${i}" title="${esc(tip)}"><span class="nm">${esc(cn)}</span><span class="x">${esc(subOf(n))}</span>${out}</div>`;
   }
 
-  /* ---------------- 画布 ---------------- */
-  const view = { x: 0, y: 0, z: 1 };
+  /* ---------- 画布 ---------- */
+  const root = document.getElementById("root");
   const cv = document.createElement("div");
   cv.className = "cv";
-
   const layer = document.createElement("div");
   layer.className = "cvv";
-  if (diagram === null) {
-    layer.innerHTML = `<div class="note" style="position:absolute;left:32px;top:32px">没有可画的来路：这个项目还没有输入记录</div>`;
-  } else {
-    const paths = edges.map((edge) => {
-      const a = L.pos.get(edge.from);
-      const b = L.pos.get(edge.to);
-      if (a === undefined || b === undefined) return "";
-      const cls = edge.run ? "run" : edge.kind === "loose" ? "loose" : "";
-      return `<path d="${edgePath(a, b)}"${cls === "" ? "" : ` class="${cls}"`}/>`;
-    }).join("");
-    layer.innerHTML = `<svg width="${Math.max(1, L.width)}" height="${Math.max(1, L.height)}">${paths}</svg>${nodes.map(nodeHtml).join("")}`;
-  }
+  const paths = E.map((e) => {
+    const a = L.pos.get(e.from);
+    const b = L.pos.get(e.to);
+    if (a === undefined || b === undefined) return "";
+    const cls = e.run ? "run" : e.kind === "loose" ? "loose" : "";
+    return `<path d="${edgePath(a, b)}" data-a="${esc(e.from)}" data-b="${esc(e.to)}"${cls === "" ? "" : ` class="${cls}"`}/>`;
+  }).join("");
+  layer.innerHTML = `<svg width="${Math.max(1, L.width)}" height="${Math.max(1, L.height)}">${paths}</svg>${N.map(nodeHtml).join("")}`;
   cv.appendChild(layer);
+  root.appendChild(cv);
+  for (const cls of ["t", "b", "l"]) {
+    const edge = document.createElement("div");
+    edge.className = `edge ${cls}`;
+    root.appendChild(edge);
+  }
 
-  function apply() {
+  const view = { x: 0, y: 0, z: 1 };
+  const apply = () => {
     layer.style.transform = `translate(${view.x}px,${view.y}px) scale(${view.z})`;
     const pct = document.getElementById("pct");
     if (pct !== null) pct.textContent = `${Math.round(view.z * 100)}%`;
-  }
+  };
+  const BAND = { left: 264, top: 76, bottom: 268, right: 28 };
+  /* 对话区要能改画布的可视带宽，也要能知道当前选中了哪个节点。 */
+  window.__BOOK = {
+    setGutter(px) {
+      BAND.right = Math.round(px);
+      fit();
+    },
+  };
 
-  /** 顶栏 52 + 底栏 248，剩下的才给图。 */
-  const BAND = { top: 64, bottom: 264, side: 24 };
-
-  function fit() {
-    const availW = cv.clientWidth - BAND.side * 2;
+  const fit = () => {
+    const availW = cv.clientWidth - BAND.left - BAND.right;
     const availH = cv.clientHeight - BAND.top - BAND.bottom;
-    const z = Math.min(1, availW / Math.max(1, L.width), availH / Math.max(1, L.height));
-    view.z = Math.max(0.35, z);
-    view.x = BAND.side + (availW - L.width * view.z) / 2;
+    view.z = Math.max(0.3, Math.min(1, availW / Math.max(1, L.width), availH / Math.max(1, L.height)));
+    view.x = BAND.left + (availW - L.width * view.z) / 2;
     view.y = BAND.top + (availH - L.height * view.z) / 2;
     apply();
-  }
-
-  function zoomAt(factor, px, py) {
-    const next = Math.min(2, Math.max(0.35, view.z * factor));
+  };
+  const zoomAt = (f, px, py) => {
+    const next = Math.min(2, Math.max(0.3, view.z * f));
     if (next === view.z) return;
     view.x = px - (px - view.x) * (next / view.z);
     view.y = py - (py - view.y) * (next / view.z);
     view.z = next;
     apply();
-  }
-
-  cv.addEventListener("wheel", (event) => {
-    event.preventDefault();
-    const rect = cv.getBoundingClientRect();
-    zoomAt(Math.exp(-event.deltaY * 0.0015), event.clientX - rect.left, event.clientY - rect.top);
+  };
+  cv.addEventListener("wheel", (e) => {
+    e.preventDefault();
+    const r = cv.getBoundingClientRect();
+    zoomAt(Math.exp(-e.deltaY * 0.0015), e.clientX - r.left, e.clientY - r.top);
   }, { passive: false });
-
   let drag = null;
-  cv.addEventListener("pointerdown", (event) => {
-    if (event.button !== 0) return;
-    if (event.target.closest(".menu") !== null) return;
-    drag = { x: event.clientX, y: event.clientY, vx: view.x, vy: view.y, moved: false };
-    cv.setPointerCapture(event.pointerId);
+  cv.addEventListener("pointerdown", (e) => {
+    if (e.button !== 0) return;
+    /* 命中在按下时就记下来：setPointerCapture 之后，pointerup 的 target
+       会变成画布本身，那时候再 closest(".nd") 永远是 null——真人点永远不生效，
+       合成事件因为 setPointerCapture 抛错反而"看起来能用"。 */
+    drag = { x: e.clientX, y: e.clientY, vx: view.x, vy: view.y, moved: false, hit: e.target.closest(".nd") };
+    try { cv.setPointerCapture(e.pointerId); } catch { /* 合成事件没有真实指针 */ }
   });
-  cv.addEventListener("pointermove", (event) => {
+  cv.addEventListener("pointermove", (e) => {
     if (drag === null) return;
-    const dx = event.clientX - drag.x;
-    const dy = event.clientY - drag.y;
-    if (!drag.moved && Math.hypot(dx, dy) > 3) {
+    const dx = e.clientX - drag.x;
+    const dy = e.clientY - drag.y;
+    if (Math.hypot(dx, dy) > 3) {
       drag.moved = true;
       cv.classList.add("drag");
     }
-    if (!drag.moved) return;
     view.x = drag.vx + dx;
     view.y = drag.vy + dy;
     apply();
   });
-  cv.addEventListener("pointerup", (event) => {
-    const moved = drag === null ? true : drag.moved;
+  cv.addEventListener("pointerup", (e) => {
+    const pending = drag;
     drag = null;
     cv.classList.remove("drag");
-    if (moved) return;
-    if (event.target.closest(".menu") !== null) return;
-    const node = event.target.closest(".nd");
-    select(node === null ? null : Number(node.getAttribute("data-i")));
+    if (pending === null || pending.moved) return;
+    if (pending.hit !== null) selectNode(N[Number(pending.hit.getAttribute("data-i"))]);
   });
 
-  /* ---------------- 顶栏 / 底栏 ---------------- */
-  const bar = document.createElement("div");
-  bar.className = "bp";
-  bar.innerHTML = `<div class="bp-hd" id="bphd"></div><div class="bp-bd" id="bpbd"></div><div class="bp-ft" id="bpft"></div>`;
-
-  const topBar = document.createElement("div");
-  topBar.className = "fbar";
-  const sameRev = Boolean(DATA.currentRevision && DATA.lastRunRevision && DATA.currentRevision === DATA.lastRunRevision);
-  const program = DATA.program === null ? "—" : DATA.program.name;
-  const draft = DATA.session === null ? "" : DATA.session.draftBranch;
-  topBar.innerHTML = `
-    <div class="brand"><b>${esc(program)}</b><span>${esc(draft)}</span></div>
-    <span class="rev">工作集 <b>${esc(short(DATA.currentRevision))}</b></span>
-    <span class="rev">上次运行 <b>${esc(short(DATA.lastRunRevision))}</b></span>
-    ${sameRev || DATA.lastRunRevision === null ? "" : '<span class="chip amber">数据已更新</span>'}
-    <span class="rev">${DATA.revisions.length} 个数据版本 · ${DATA.runs.length} 次运行</span>
+  /* ---------- 顶栏 ---------- */
+  const top = document.createElement("div");
+  top.className = "glass fbar";
+  const same = Boolean(V.currentRevision && V.lastRunRevision && V.currentRevision === V.lastRunRevision);
+  top.innerHTML = `
+    <div class="brand"><b>${esc(V.program === null ? "—" : V.program.name)}</b><span>${esc(V.session === null ? "" : V.session.draftBranch)}</span></div>
+    <span class="rev">工作集 <b>${esc(short(V.currentRevision))}</b></span>
+    <span class="rev">上次运行 <b>${esc(short(V.lastRunRevision))}</b></span>
+    ${same || V.lastRunRevision === null ? "" : '<span class="chip note">数据已更新</span>'}
+    <span class="rev">${V.revisions.length} 个数据版本 · ${V.runs.length} 次运行</span>
     <span class="grow"></span>
-    <button class="btn off" disabled title="v1 只读">发布</button>`;
+    <button class="btn off" disabled>发布</button>`;
 
-  const zoomBar = document.createElement("div");
-  zoomBar.className = "fzoom";
-  zoomBar.innerHTML = `<button data-zoom="out" title="缩小">−</button><span class="pct" id="pct">100%</span><button data-zoom="in" title="放大">+</button><button class="fit" data-zoom="fit">适应</button>`;
+  /* ---------- 左侧托盘 ---------- */
+  const files = (I === null ? [] : I.files) || [];
+  const tray = document.createElement("div");
+  tray.className = "tray";
+  const fileRows = files.map((f, i) => {
+    const all = f.direct.concat(f.derived);
+    const sheets = [...new Set(f.direct.map((r) => r.sheet).filter((s) => s !== null))];
+    const meta = `${sheets.length} 个 sheet · ${all.length} 张表 · ${kb(f.bytes)}`;
+    return `<button class="row" data-f="${i}">
+      <span class="t"><span class="n" title="${esc(f.name)}">${esc(f.name)}</span><span class="m">${meta}</span></span>
+    </button>`;
+  }).join("");
+  tray.innerHTML = `
+    <div class="hd"><b>来源</b><span>${files.length} 个文件</span>
+      <button class="imp" title="导入文件（也可以直接拖进来）"><svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M6 2.5v7M2.5 6h7"/></svg></button>
+      <button class="fold" title="收起"><svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M7.5 2.5 4 6l3.5 3.5"/></svg></button>
+    </div>
+    <div class="list">${fileRows}</div>
+    <input class="pick" type="file" multiple hidden>`;
 
-  const toastEl = document.createElement("div");
-  toastEl.className = "toast";
+  /* ---------- 底栏 ---------- */
+  const bar = document.createElement("div");
+  bar.className = "glass bp";
 
-  root.append(cv, topBar, zoomBar, bar, toastEl);
-
-  /* ---------------- 文案 ---------------- */
-  const rowText = (row) => (row === null || row.rows === null ? "—" : `${fmtNum(row.rows)} 行${row.columns === null ? "" : ` · ${row.columns} 列`}`);
-  const usageText = (row) => {
-    if (row === null || row.usage === null) return "没用到";
-    return row.usage === "read" ? "读" : row.usage === "write" ? "写" : "读写";
-  };
-
-  function sampleHtml(sample, title) {
-    if (sample === null) {
-      return `<div class="pane grow"><div class="ilabel">${esc(title)}</div><div class="note">没有可读取的库</div></div>`;
-    }
-    const head = sample.columns.map((col) => `<th>${esc(col)}</th>`).join("");
-    const body = sample.rows.map((cells) => `<tr>${cells.map((cell) => `<td>${esc(cell === null ? "" : cell)}</td>`).join("")}</tr>`).join("");
-    return `
-      <div class="pane grow">
-        <div class="ilabel">${esc(title)}<span class="r">${esc(sample.name)}</span></div>
-        <table class="tbl2"><thead><tr>${head}</tr></thead><tbody>${body}</tbody>
-        <tfoot><tr><td colspan="${sample.columns.length}">${esc(fmtNum(sample.total))} 行 · ${esc(sample.columnTotal)} 列 · ${esc(sample.note)}</td></tr></tfoot></table>
-      </div>`;
-  }
-
-  /** 本次运行的路径：物化表 →（节点 → 写出的表）… */
-  function stations() {
-    if (graph === null) return [];
+  const stations = () => {
+    if (G === null) return [];
     const list = [];
-    const push = (id, label) => {
-      const index = nodeIndex.get(id);
-      if (index !== undefined) list.push({ index, label });
-    };
-    for (const item of graph.materialize) push(`t:${item.table}`, item.table);
-    for (const node of graph.nodes) {
-      const hit = nodes.find((item) => item.kind === "compute" && item.ref === node.fn) ?? null;
-      if (hit !== null) push(hit.id, node.fn);
-      for (const table of node.writes) push(`t:${table}`, table);
+    for (const m of G.materialize) list.push({ label: show(m.table) });
+    for (const n of G.nodes) {
+      list.push({ label: show(n.fn) });
+      for (const t of n.writes) list.push({ label: show(t) });
     }
     return list;
-  }
+  };
 
-  function headHtml() {
-    const tabHtml = [
-      ["run", "本次运行", false],
-      ["sel", "选中", state.sel === null],
-      ["chat", "会话", false],
-    ].map(([id, label, off]) => `<button class="btab${state.tab === id ? " on" : ""}" data-tab="${id}"${off ? " disabled" : ""}>${label}</button>`).join("");
-    const path = stations().map((item, index) => `${index === 0 ? "" : '<span class="sep">→</span>'}<button data-goto="${item.index}"${state.sel === item.index ? ' class="on"' : ""}>${esc(item.label)}</button>`).join("");
-    const meta = graph === null
-      ? "没有运行记录"
-      : `运行 ${graph.runShort} · ${graph.identical === true ? "一致" : graph.identical === false ? "有变化" : "—"} · ${fmtDur(graph.elapsedMs)}`;
-    return `${tabHtml}<div class="bp-path">${path}</div><span class="bp-meta">${esc(meta)}</span>`;
-  }
-
-  function runHtml() {
-    if (graph === null) {
-      return `<div class="pane grow"><div class="note">这次运行没有 run.json，画不出流程</div></div>`;
+  /* 每张表在 inputs 里的那一行：行×列、来自哪个 sheet、谁写出来的。 */
+  const tableRows = new Map();
+  if (V.inputs !== undefined && V.inputs !== null) {
+    for (const f of V.inputs.files) {
+      for (const r of f.direct.concat(f.derived)) tableRows.set(r.name, { ...r, fileName: f.name });
     }
-    const reads = [...new Set(graph.nodes.flatMap((node) => node.reads))];
-    const writes = [...new Set(graph.nodes.flatMap((node) => node.writes))];
-    const steps = graph.nodes.reduce((sum, node) => sum + node.steps.length, 0);
-    return `
-      <div class="pane" style="width:460px;flex:none">
-        <dl class="kv">
-          <div><dt>一致</dt><dd class="${graph.identical === true ? "ok" : ""}">${graph.identical === null ? "—" : graph.identical ? "是 · 重跑输出未变" : "否 · 输出有变化"}</dd></div>
-          <div><dt>代码</dt><dd>${esc(short(graph.codeCommit))}</dd></div>
-          <div><dt>数据</dt><dd>${esc(short(graph.revision))}</dd></div>
-          <div><dt>耗时</dt><dd>${esc(fmtDur(graph.elapsedMs))}</dd></div>
-          <div><dt>节点</dt><dd>${graph.nodes.length} 个 · ${steps} 步</dd></div>
-          <div><dt>as of</dt><dd>${esc(graph.asOf ?? "—")}</dd></div>
-        </dl>
-        <div class="iowrap"><span class="k">读</span><span class="v" title="${esc(reads.join(" · "))}">${esc(reads.join(" · ") || "—")}</span></div>
-        <div class="iowrap"><span class="k">写</span><span class="v" title="${esc(writes.join(" · "))}">${esc(writes.join(" · ") || "—")}</span></div>
-        <div class="note" style="margin-top:6px;white-space:normal">${esc(graph.entry)}</div>
-      </div>
-      ${sampleHtml(graph.sample, "产出")}`;
+    for (const r of V.inputs.orphans) if (!tableRows.has(r.name)) tableRows.set(r.name, r);
   }
 
-  function tablePane(name) {
-    const hit = tableRows.get(name) ?? null;
-    const row = hit === null ? null : hit.row;
-    const origin = row === null
-      ? "库里有，但记录里追不到它是从哪来的"
-      : row.kind === "materialize"
-        ? `物化 · 运行 ${row.via}`
-        : row.kind === "import"
-          ? "导入 · 表里逐行记着 _source_file / _source_sheet"
-          : row.kind === "derive"
-            ? `派生 · ${row.writer === null ? row.via : row.writer.fn}（${row.from.join(" + ")}）`
-            : "库里有，但记录里追不到它是从哪来的";
-    const where = hit !== null && hit.file !== null ? `${hit.file.name}${row !== null && row.sheet !== null ? ` #${row.sheet}` : ""}` : "没有来源文件";
-    const writer = row === null || row.writer === null ? "" : ` · 写出者 ${row.writer.fn}${row.writer.elapsedMs === null ? "" : ` · ${fmtDur(row.writer.elapsedMs)}`}`;
-    return `
-      <div class="pane" style="width:460px;flex:none">
-        <div class="selh"><span class="nm">${esc(name)}</span><span class="st">${esc(rowText(row))}</span></div>
-        <div class="note" title="${esc(where)}">${esc(where)}</div>
-        <div class="note" title="${esc(origin)}">${esc(origin)}</div>
-        <div class="note">本次运行：${row === null ? "—" : esc(usageText(row))}${esc(writer)}</div>
-      </div>
-      ${row === null ? `<div class="pane grow"><div class="note">没有这张表的取样</div></div>` : sampleHtml(row.sample, "取样")}`;
-  }
+  /* 选中的是"画布上的哪个节点"，不再是"第几个文件"：
+     表、机器、文件都点得动，底栏跟着换内容。 */
+  const selNode = { id: null };
+  const sel = { value: 0 };
 
-  function filePane(name) {
-    const file = fileRows.get(name) ?? null;
-    if (file === null) return `<div class="pane grow"><div class="note">这个文件已经不在清单里</div></div>`;
-    const all = file.direct.concat(file.derived);
-    const list = all.map((row) => {
-      const index = nodeIndex.get(`t:${row.name}`);
-      return `<div class="link"${index === undefined ? "" : ` data-goto="${index}"`}>${esc(row.name)}<span class="x">${esc(rowText(row))}</span></div>`;
-    }).join("");
+  function filePane(f) {
+    const all = f.direct.concat(f.derived);
+    const links = all.map((r) => `<div class="link"><span class="nm">${esc(show(r.name))}</span><span class="x">${esc(r.rows === null ? "—" : `${num(r.rows)}×${r.columns}`)}</span></div>`).join("");
+    const sheets = [...new Set(f.direct.map((r) => r.sheet).filter((s) => s !== null))];
     return `
-      <div class="pane" style="width:460px;flex:none">
-        <div class="selh"><span class="nm">${esc(name)}</span><span class="st">${esc(fmtBytes(file.bytes))}</span></div>
-        <div class="note">${file.direct.length} 张物化/导入 · ${file.derived.length} 张派生${file.inBatch ? "" : " · 不在本次批次"}</div>
-        <div class="note">${esc(file.sha256 === null ? "没有 sha256 记录" : `sha256 ${file.sha256.slice(0, 16)}…`)}</div>
+      <div class="pane" style="width:330px;flex:none">
+        <div class="selh"><span class="nm">${esc(f.name)}</span><span class="st">${esc(kb(f.bytes))}</span></div>
+        <div class="note">${f.direct.length} 张物化/导入 · ${f.derived.length} 张派生 · ${f.inBatch ? "在本次批次" : "不在本次批次"}</div>
+        <div class="note">sheet：${esc(sheets.join(" · ") || "—")}</div>
+        <div class="note">${esc(f.sha256 === null ? "没有 sha256 记录" : `sha256 ${f.sha256.slice(0, 16)}…`)}</div>
       </div>
       <div class="pane grow">
-        <div class="ilabel">变成的表<span class="r">${all.length} 张</span></div>
-        ${list || '<div class="note">这个文件还没有物化记录</div>'}
+        <div class="ilabel">被物化成<span class="r">${all.length} 张</span></div>
+        <div class="links2">${links || '<div class="note">这个文件还没有物化记录</div>'}</div>
       </div>`;
   }
 
-  function sheetPane(ref) {
-    const parts = ref.split("\u0000");
-    const file = parts[0] ?? "";
-    const sheet = parts[1] ?? "";
-    const fileRow = fileRows.get(file) ?? null;
-    const rows = fileRow === null ? [] : fileRow.direct.filter((row) => row.sheet === sheet);
-    const list = rows.map((row) => {
-      const index = nodeIndex.get(`t:${row.name}`);
-      return `<div class="link"${index === undefined ? "" : ` data-goto="${index}"`}>${esc(row.name)}<span class="x">${esc(rowText(row))}</span></div>`;
-    }).join("");
+  function linkRow(label, value) {
+    return `<div class="link"><span class="nm">${esc(label)}</span><span class="x">${esc(value)}</span></div>`;
+  }
+
+  function nodePane(n) {
+    /* sheet 现在是画布上的一等节点：它物化成哪张表，写在它自己身上。 */
+    if (n.kind === "sheet") {
+      const out = n.out === null || n.out === undefined ? null : n.out;
+      const row = out === null ? undefined : tableRows.get(out.label);
+      const owner = String(n.ref ?? "").split("\u0000")[0];
+      return `
+        <div class="pane" style="width:330px;flex:none">
+          <div class="selh"><span class="nm">${esc(n.label)}</span><span class="st">sheet</span></div>
+          <div class="note">${row === undefined ? "没有行数记录" : `${num(row.rows)} 行 × ${row.columns} 列`}</div>
+          <div class="note">来自 ${esc(owner === "" ? "—" : owner)}</div>
+          <div class="note">物化成 ${out === null ? "—" : `<span class="idm">${esc(out.label)}</span>`}</div>
+        </div>
+        <div class="pane grow">
+          <div class="ilabel">下游<span class="r">${E.filter((e) => e.from === n.id).length} 条</span></div>
+          <div class="links2">${E.filter((e) => e.from === n.id).map((e) => linkRow(show(byId.get(e.to).label), "")).join("") || '<div class="note">这张 sheet 没有被任何一步读</div>'}</div>
+        </div>`;
+    }
+    if (n.kind === "compute") {
+      const g = G === null ? undefined : G.nodes.find((x) => x.fn === n.label);
+      const reads = g === undefined ? [] : g.reads;
+      const writes = g === undefined ? [] : g.writes;
+      return `
+        <div class="pane" style="width:330px;flex:none">
+          <div class="selh"><span class="nm">${esc(show(n.label))}</span><span class="st"><span class="idm">${esc(n.label)}</span></span></div>
+          <div class="note">这一步${n.run === true ? "在本次运行里跑过" : "不在本次运行里"} · 耗时 ${dur(n.elapsedMs)}</div>
+          <div class="note">${esc(n.file === null ? "没有文件记录" : n.file.split(/[\\/]/).pop())}</div>
+        </div>
+        <div class="pane grow">
+          <div class="ilabel">读<span class="r">${reads.length} 张</span></div>
+          <div class="links2">${reads.map((t) => linkRow(show(t), t)).join("") || '<div class="note">—</div>'}</div>
+          <div class="ilabel">写<span class="r">${writes.length} 张</span></div>
+          <div class="links2">${writes.map((t) => linkRow(show(t), t)).join("") || '<div class="note">—</div>'}</div>
+        </div>`;
+    }
+
+    const row = tableRows.get(n.label);
+    const from = row === undefined || row.fileName === undefined ? null : row.fileName;
+    const sheet = row === undefined || row.sheet === undefined ? null : row.sheet;
+    const writer = row === undefined || row.writer === undefined ? null : row.writer;
+    const upstream = row === undefined ? [] : row.from;
     return `
-      <div class="pane" style="width:460px;flex:none">
-        <div class="selh"><span class="nm">#${esc(sheet)}</span><span class="st">${rows.length} 张表</span></div>
-        <div class="note" title="${esc(file)}">${esc(file)}</div>
+      <div class="pane" style="width:330px;flex:none">
+        <div class="selh"><span class="nm">${esc(show(n.label))}</span><span class="st"><span class="idm">${esc(n.label)}</span></span></div>
+        <div class="note">${n.rows === null ? "行数未知" : `${num(n.rows)} 行`}${n.columns === null ? "" : ` × ${n.columns} 列`}</div>
+        <div class="note">${from === null ? (n.loose === true ? "没有上游，孤立的表" : "派生表，上游见右") : `来自 ${esc(from)}${sheet === null ? "" : ` · sheet ${esc(sheet)}`}`}</div>
+        <div class="note">${writer === null || writer === undefined ? "不是任何节点写的（物化/导入）" : `由 ${esc(show(writer.fn))} 写出 · ${dur(writer.elapsedMs)}`}</div>
       </div>
       <div class="pane grow">
-        <div class="ilabel">这个 sheet 变成的表<span class="r">${rows.length}</span></div>
-        ${list || '<div class="note">这个 sheet 没有物化记录</div>'}
+        <div class="ilabel">上游<span class="r">${upstream.length} 张</span></div>
+        <div class="links2">${upstream.map((t) => linkRow(show(t), t)).join("") || '<div class="note">—</div>'}</div>
       </div>`;
   }
 
-  function computePane(index) {
-    const node = nodes[index];
-    if (node === undefined) return `<div class="pane grow"><div class="note">这个节点已经不在图里</div></div>`;
-    const ups = edges.filter((edge) => edge.to === node.id).map((edge) => nodes[nodeIndex.get(edge.from) ?? -1]).filter((item) => item !== undefined);
-    const downs = edges.filter((edge) => edge.from === node.id).map((edge) => nodes[nodeIndex.get(edge.to) ?? -1]).filter((item) => item !== undefined);
-    const focused = nodeByFn.get(node.ref) ?? null;
-    const steps = focused === null
-      ? `<div class="note">这一步不在本次运行里，没有步骤记录</div>`
-      : `<div class="steps">${focused.steps.map((step) => `
-          <div class="step" data-fn="${esc(focused.fn)}" data-step="${esc(step.n)}" data-line="${esc(step.line)}">
-            <span class="i">${esc(step.n)}</span><span class="tx">${esc(step.label)}</span><span class="ln">:${esc(step.line)}</span>
-            <div class="menu"><button data-act="copy-step">复制引用</button><button data-act="add-step">加到聊天框</button></div>
-          </div>`).join("")}</div>`;
-    return `
-      <div class="pane" style="width:460px;flex:none">
-        <div class="selh"><span class="nm">${esc(node.label)}</span><span class="st">${esc(node.elapsedMs === null ? "" : fmtDur(node.elapsedMs))}</span></div>
-        <div class="note">${esc(node.file === null ? "代码文件没有记录" : baseName(node.file))}${node.runShort === null ? "" : ` · 运行 ${esc(node.runShort)}`}</div>
-        <div class="note" title="${esc(ups.map((item) => item.label).join(" · "))}">读 ${esc(ups.map((item) => item.label).join(" · ") || "—")}</div>
-        <div class="note" title="${esc(downs.map((item) => item.label).join(" · "))}">写 ${esc(downs.map((item) => item.label).join(" · ") || "—")}</div>
-      </div>
-      <div class="pane grow"><div class="ilabel">步骤<span class="r">${focused === null ? "" : `${focused.steps.length} 步`}</span></div>${steps}</div>`;
+  function paintBar() {
+    const f = files[sel.value];
+    const selected = selNode.id === null ? null : N.find((n) => n.id === selNode.id) ?? null;
+    const path = stations().map((s, i) => `${i === 0 ? "" : '<span class="sep">→</span>'}<button>${esc(s.label)}</button>`).join("");
+    const meta = G === null ? "没有运行记录" : `运行 ${esc(G.runShort)} · ${G.identical === true ? "一致" : G.identical === false ? "有变化" : "—"} · ${dur(G.elapsedMs)}`;
+    bar.innerHTML = `
+      <div class="bp-hd">
+        <button class="btab">本次运行</button>
+        <button class="btab on">选中</button>
+        <div class="bp-path">${path}</div>
+        <span class="bp-meta">${esc(meta)}</span>
+      <button class="bp-fold" title="收起/展开"><svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 7.5 6 4l3.5 3.5"/></svg></button></div>
+      <div class="bp-bd">${selected !== null && selected.kind !== "file" ? nodePane(selected) : f === undefined ? '<div class="pane grow"><div class="note">点画布上的任意一个节点，或者左边的文件</div></div>' : filePane(f)}</div>
+      <div class="bp-ft"><span class="bp-hint">对话在右边</span><button class="btn off" disabled>复制</button></div>`;
   }
 
-  function chatHtml() {
-    if (DATA.transcript.length === 0) return `<div class="pane grow"><div class="note">这次运行没有对话记录</div></div>`;
-    const hit = DATA.transcript.find((item) => item.id === DATA.focusEpisode);
-    const episode = hit ?? DATA.transcript[DATA.transcript.length - 1];
-    if (episode === undefined) return `<div class="pane grow"><div class="note">这次运行没有对话记录</div></div>`;
-    return `
-      <div class="pane grow">
-        <div class="ilabel">会话<span class="r">${DATA.transcript.length} 段 · 工具调用 ${episode.toolCalls} 次 · 写入 ${episode.writes} 次 · ${esc(fmtTime(episode.start))}</span></div>
-        <div class="line"><span class="who">我</span><span class="say" title="${esc(episode.user)}">${esc(episode.user || "（空）")}</span></div>
-        <div class="line"><span class="who">模型</span><span class="say" title="${esc(episode.assistant)}">${esc(episode.assistant || "（这一段没有可见回复）")}</span></div>
-      </div>`;
-  }
-
-  function bodyHtml() {
-    if (state.tab === "chat") return chatHtml();
-    if (state.tab === "sel") {
-      if (state.sel === null) return `<div class="pane grow"><div class="note">点画布上的一个节点</div></div>`;
-      const node = nodes[state.sel];
-      if (node === undefined) return `<div class="pane grow"><div class="note">这个节点已经不在图里</div></div>`;
-      if (node.kind === "table") return tablePane(node.ref);
-      if (node.kind === "file") return filePane(node.ref);
-      if (node.kind === "sheet") return sheetPane(node.ref);
-      return computePane(state.sel);
+  /* ---------- 选中与聚焦 ---------- */
+  function closure(fileName) {
+    const start = `f:${fileName}`;
+    const lit = new Set([start]);
+    const stack = [start];
+    while (stack.length > 0) {
+      const id = stack.pop();
+      for (const next of downs.get(id) ?? []) {
+        if (!next || lit.has(next.id)) continue;
+        lit.add(next.id);
+        stack.push(next.id);
+      }
     }
-    return runHtml();
+    return lit;
   }
 
-  function footHtml() {
-    const chips = state.chips.map((chip, index) => `<span class="ref">${esc(chip.label)}<button data-remove="${index}" title="移除">×</button></span>`).join("");
-    const ready = state.chips.length > 0 || state.text.trim() !== "";
-    return `<div class="box">${chips}<input id="compose" placeholder="${state.chips.length > 0 ? "补充一句…" : "把某一步加到聊天框…"}" value="${esc(state.text)}"></div>
-      <button class="btn${ready ? " primary" : " off"}" data-act="copy-compose"${ready ? "" : " disabled"}>复制</button>`;
-  }
-
-  function paintHead() {
-    document.getElementById("bphd").innerHTML = headHtml();
-  }
-  function paintBody() {
-    document.getElementById("bpbd").innerHTML = bodyHtml();
-  }
-  function paintFoot() {
-    document.getElementById("bpft").innerHTML = footHtml();
-    const input = document.getElementById("compose");
-    if (input !== null) input.addEventListener("input", (event) => { state.text = event.target.value; });
-  }
-
-  function select(index) {
-    state.sel = index;
-    for (const element of layer.querySelectorAll(".nd")) {
-      element.classList.toggle("sel", Number(element.getAttribute("data-i")) === index);
+  function selectNode(n) {
+    if (n === undefined) return;
+    selNode.id = n.id;
+    /* 文件节点仍然走原来的文件面板；表 / 机器走节点面板。 */
+    if (n.kind === "file") {
+      const index = files.findIndex((f) => `f:${f.name}` === n.id);
+      if (index >= 0) sel.value = index;
     }
-    if (index !== null) state.tab = "sel";
-    else if (state.tab === "sel") state.tab = "run";
-    paintHead();
-    paintBody();
+    const lit = null;
+    for (const el of layer.querySelectorAll(".nd")) {
+      const node = N[Number(el.getAttribute("data-i"))];
+      el.classList.toggle("dim", lit !== null && !lit.has(node.id));
+      el.classList.toggle("sel", node.id === n.id);
+    }
+    for (const el of layer.querySelectorAll("path")) el.style.opacity = "1";
+    for (const el of tray.querySelectorAll(".row")) {
+      const f = files[Number(el.getAttribute("data-f"))];
+      el.classList.toggle("on", f !== undefined && (n.kind === "file" ? `f:${f.name}` === n.id : f.direct.concat(f.derived).some((r) => r.name === n.label)));
+    }
+    paintBar();
+    if (typeof window.__ON_SELECT === "function") window.__ON_SELECT(n);
   }
 
-  /* ---------------- 引用与动作 ---------------- */
-  function refOf(index) {
-    const node = nodes[index];
-    if (node === undefined) return null;
-    if (node.kind === "table") return { ref: `@${dbRef}:${node.ref}`, chip: node.ref };
-    if (node.kind === "file") return { ref: `@${node.ref}`, chip: node.ref };
-    if (node.kind === "sheet") {
-      const parts = node.ref.split("\u0000");
-      return { ref: `@${parts[0] ?? ""}#${parts[1] ?? ""}`, chip: `#${parts[1] ?? ""}` };
+  function select(value, focus) {
+    sel.value = value;
+    const f = files[value];
+    const nodeId = f === undefined ? null : `f:${f.name}`;
+    selNode.id = nodeId;
+    const lit = focus && nodeId !== null ? closure(f.name) : null;
+    for (const el of layer.querySelectorAll(".nd")) {
+      const n = N[Number(el.getAttribute("data-i"))];
+      el.classList.toggle("dim", lit !== null && !lit.has(n.id));
+      el.classList.toggle("sel", nodeId !== null && n.id === nodeId);
     }
-    return { ref: node.file === null ? `@${node.label}` : `@${baseName(node.file)}`, chip: node.label };
+    for (const el of layer.querySelectorAll("path")) {
+      const a = el.getAttribute("data-a");
+      const b = el.getAttribute("data-b");
+      el.style.opacity = lit === null ? "1" : lit.has(a) && lit.has(b) ? "1" : "0.18";
+    }
+    for (const el of tray.querySelectorAll(".row")) {
+      el.classList.toggle("on", Number(el.getAttribute("data-f")) === value);
+    }
+    paintBar();
+    if (typeof window.__ON_SELECT === "function") window.__ON_SELECT(nodeId === null ? null : N.find((n) => n.id === nodeId) ?? null);
   }
 
-  function toast(message) {
-    toastEl.textContent = message;
-    toastEl.classList.add("on");
-    clearTimeout(toast.timer);
-    toast.timer = setTimeout(() => toastEl.classList.remove("on"), 1600);
-  }
+  /* ---------- 缩放条 ---------- */
+  const zbar = document.createElement("div");
+  zbar.className = "glass fzoom";
+  zbar.innerHTML = `<button data-z="out">−</button><span class="pct" id="pct">100%</span><button data-z="in">+</button><button class="fit" data-z="fit">适应</button>`;
 
-  async function copyText(text) {
-    try {
-      await navigator.clipboard.writeText(text);
-      toast("已复制");
-    } catch {
-      window.prompt("复制这段：", text);
-    }
-  }
+  root.append(top, tray, zbar, bar);
 
-  function addChip(chip) {
-    if (!state.chips.some((item) => item.ref === chip.ref)) state.chips.push(chip);
-    paintFoot();
-    toast("已加到聊天框");
-  }
-
-  root.addEventListener("click", (event) => {
-    const target = event.target;
-
-    const remove = target.closest("[data-remove]");
-    if (remove !== null) {
-      state.chips.splice(Number(remove.getAttribute("data-remove")), 1);
-      paintFoot();
-      return;
-    }
-
-    const goto = target.closest("[data-goto]");
-    if (goto !== null) {
-      select(Number(goto.getAttribute("data-goto")));
-      return;
-    }
-
-    const tab = target.closest("[data-tab]");
-    if (tab !== null) {
-      state.tab = tab.getAttribute("data-tab");
-      paintHead();
-      paintBody();
-      return;
-    }
-
-    const zoomBtn = target.closest("[data-zoom]");
-    if (zoomBtn !== null) {
-      const kind = zoomBtn.getAttribute("data-zoom");
-      if (kind === "fit") fit();
-      else zoomAt(kind === "in" ? 1.2 : 1 / 1.2, cv.clientWidth / 2, cv.clientHeight / 2);
-      return;
-    }
-
-    const act = target.closest("[data-act]");
-    if (act === null) return;
-    const name = act.getAttribute("data-act");
-
-    if (name === "copy-compose") {
-      const line = state.chips.map((chip) => chip.ref).join(" ");
-      void copyText([line, state.text].filter((part) => part && part.trim() !== "").join(" ").trim());
-      return;
-    }
-
-    if (name === "copy-step" || name === "add-step") {
-      const step = act.closest(".step");
-      if (step === null) return;
-      const fn = step.getAttribute("data-fn");
-      const line = step.getAttribute("data-line");
-      const focused = nodeByFn.get(fn);
-      const ref = `@${focused === undefined || focused === null ? fn : baseName(focused.file)}:${line}`;
-      if (name === "copy-step") void copyText(ref);
-      else addChip({ ref, label: `${fn} · 步骤 ${step.getAttribute("data-step")}` });
-      return;
-    }
-
-    const raw = act.getAttribute("data-i");
-    if (raw === null) return;
-    const found = refOf(Number(raw));
-    if (found === null) return;
-    if (name === "copy") void copyText(found.ref);
-    else if (name === "add") addChip(found);
+  /* ---------- 面板可以拖：标题栏是把手 ---------- */
+  const draggable = (panel, selector) => {
+    /* 用事件委托而不是绑在手柄上：底栏的头部每次 paintBar 都会重建，
+       绑在具体元素上的话，重绘一次就失效了。 */
+    panel.addEventListener("pointerdown", (e) => {
+      if (e.button !== 0) return;
+      if (e.target.closest(selector) === null || e.target.closest("button") !== null) return;
+      const rect = panel.getBoundingClientRect();
+      const from = { x: e.clientX, y: e.clientY, l: rect.left, t: rect.top };
+      try { panel.setPointerCapture(e.pointerId); } catch { /* 合成事件里没有真实指针，忽略 */ }
+      const move = (ev) => {
+        const left = Math.max(4, Math.min(window.innerWidth - 120, from.l + ev.clientX - from.x));
+        const top = Math.max(4, Math.min(window.innerHeight - 48, from.t + ev.clientY - from.y));
+        panel.style.left = `${Math.round(left)}px`;
+        panel.style.top = `${Math.round(top)}px`;
+        panel.style.right = "auto";
+        panel.style.bottom = "auto";
+      };
+      const done = () => {
+        panel.removeEventListener("pointermove", move);
+        panel.removeEventListener("pointerup", done);
+      };
+      panel.addEventListener("pointermove", move);
+      panel.addEventListener("pointerup", done);
+    });
+  };
+  draggable(tray, ".hd");
+  draggable(bar, ".bp-hd");
+  bar.addEventListener("click", (e) => {
+    if (e.target.closest(".bp-fold") === null) return;
+    bar.classList.toggle("folded");
   });
 
-  /* ---------------- 起来 ---------------- */
-  paintHead();
-  paintBody();
-  paintFoot();
+/* ---- 自检（只在 ?selftest 时跑）：拖动和收起是不是真的接上了 ---- */
+/* 点一个节点：合成 pointerdown/up，走和真人点击同一条路径 */
+const clickNode = (n) => {
+  if (n === undefined || n === null) return null;
+  const i = N.findIndex((x) => x.id === n.id);
+  if (i < 0) return null;
+  const el = cv.querySelector(`.nd[data-i="${i}"]`);
+  if (el === null) return null;
+  const r = el.getBoundingClientRect();
+  const opts = { bubbles: true, pointerId: 9, isPrimary: true, button: 0, clientX: r.left + 8, clientY: r.top + 8 };
+  el.dispatchEvent(new PointerEvent("pointerdown", opts));
+  /* 抬起打在画布上，不是节点上——这是 setPointerCapture 之后的真实 target。 */
+  cv.dispatchEvent(new PointerEvent("pointerup", opts));
+  return N[i];
+};
+
+const wantSel = new URLSearchParams(location.search).get("sel");
+if (wantSel !== null) {
+  setTimeout(() => clickNode(N.find((x) => x.label === wantSel)), 300);
+}
+
+if (location.search.includes("selftest")) {
+  setTimeout(() => {
+    const out = [];
+    const hd = tray.querySelector(".hd");
+    const r = hd.getBoundingClientRect();
+    const before = tray.getBoundingClientRect().left;
+    hd.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, pointerId: 7, isPrimary: true, button: 0, clientX: r.left + 8, clientY: r.top + 8 }));
+    tray.dispatchEvent(new PointerEvent("pointermove", { bubbles: true, pointerId: 7, isPrimary: true, clientX: r.left + 88, clientY: r.top + 48 }));
+    tray.dispatchEvent(new PointerEvent("pointerup", { bubbles: true, pointerId: 7, isPrimary: true, clientX: r.left + 88, clientY: r.top + 48 }));
+    const after = tray.getBoundingClientRect().left;
+    out.push(`drag dx=${Math.round(after - before)}`);
+
+    bar.querySelector(".bp-fold").dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    out.push(`folded=${bar.classList.contains("folded")}`);
+    bar.querySelector(".bp-fold").dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    out.push(`unfolded=${!bar.classList.contains("folded")}`);
+
+    const file = new File(["x"], "新导入_测试.xlsx", { type: "application/vnd.ms-excel" });
+    const dt = new DataTransfer();
+    dt.items.add(file);
+    tray.dispatchEvent(new DragEvent("drop", { bubbles: true, dataTransfer: dt }));
+    out.push(`imported=${tray.querySelectorAll(".row.local").length}`);
+
+    /* 字体到底是不是鸿蒙：家族名对不对，以及这个家族能不能画出这几个汉字。
+       CJK 的 advance 都是 1em，量宽度分不出家族，只能问 @font-face 本身。 */
+    const nmEl = bar.querySelector(".link .nm");
+    const sample = nmEl === null ? "原始可用" : nmEl.textContent;
+    out.push(`family=${nmEl === null ? "?" : getComputedStyle(nmEl).fontFamily.split(",")[0]}`);
+    out.push(`canRender=${document.fonts.check('12.5px "HarmonyOS Sans SC"', sample)}`);
+    const yahei = [...document.fonts].length;
+    out.push(`faces=${yahei}`);
+
+    /* 点一个表节点、一个机器节点，看底栏换没换 */
+    const tableNode = clickNode(N.find((n) => n.kind === "table" && n.label === "site_board"));
+    out.push(`tableSel=${tableNode === null ? "miss" : bar.textContent.includes(show("site_board"))}`);
+    out.push(`tableRowsShown=${/\d[\d,]* 行/.test(bar.textContent)}`);
+    const computeNode = clickNode(N.find((n) => n.kind === "compute" && n.label === "clean_positions"));
+    out.push(`computeSel=${computeNode === null ? "miss" : bar.textContent.includes(show("clean_positions"))}`);
+    out.push(`hasReads=${bar.textContent.includes("读")}`);
+    out.push(`paneKind=${bar.querySelector(".bp-bd").textContent.trim().slice(0, 18)}`);
+
+    /* 对话区：收起 / 展开 / 列表 / 拖宽 */
+    const st = () => window.__CHATSTATE();
+    const pick = (s) => document.querySelector(s);
+    const chatBefore = st();
+    pick(".chat .fold").dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    const chatFolded = st();
+    pick(".chat-rail").dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    const chatReopened = st();
+    pick(".chat .list").dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    out.push(`chat=${chatBefore.convs}conv/${chatBefore.blocks}blk/${chatBefore.md}md/${chatBefore.tools}tool`);
+    out.push(`fold=${chatFolded.open === false && chatFolded.visible === false}/${chatFolded.gutter}`);
+    out.push(`reopen=${chatReopened.open === true}/${chatReopened.gutter}`);
+    out.push(`list=${st().view === "list"}/rows=${document.querySelectorAll(".chat .conv").length}`);
+    const grip = pick(".chat .chat-grip");
+    const gr = grip.getBoundingClientRect();
+    grip.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, pointerId: 3, isPrimary: true, button: 0, clientX: gr.left + 4, clientY: gr.top + 40 }));
+    grip.dispatchEvent(new PointerEvent("pointermove", { bubbles: true, pointerId: 3, isPrimary: true, clientX: gr.left + 4 - 80, clientY: gr.top + 40 }));
+    grip.dispatchEvent(new PointerEvent("pointerup", { bubbles: true, pointerId: 3, isPrimary: true, clientX: gr.left + 4 - 80, clientY: gr.top + 40 }));
+    out.push(`dragw=${st().width}`);
+
+    const box = document.createElement("div");
+    box.id = "selftest";
+    box.textContent = "RESULT " + out.join(" | ");
+    document.body.appendChild(box);
+  }, 400);
+}
+
+
+  /* ---------- 导入：按钮选文件，或者直接拖进托盘 ---------- */
+  const list = tray.querySelector(".list");
+  const addLocal = (fileList) => {
+    for (const file of fileList) {
+      const row = document.createElement("div");
+      row.className = "row local";
+      row.innerHTML = `<span class="t"><span class="n" title="${esc(file.name)}">${esc(file.name)}</span><span class="m">${kb(file.size)} · 待物化</span></span>`;
+      list.appendChild(row);
+    }
+  };
+  tray.querySelector(".pick").addEventListener("change", (e) => {
+    addLocal(e.target.files);
+    e.target.value = "";
+  });
+  tray.querySelector(".imp").addEventListener("click", () => tray.querySelector(".pick").click());
+  tray.addEventListener("dragover", (e) => {
+    e.preventDefault();
+    tray.classList.add("drop");
+  });
+  tray.addEventListener("dragleave", () => tray.classList.remove("drop"));
+  tray.addEventListener("drop", (e) => {
+    e.preventDefault();
+    tray.classList.remove("drop");
+    if (e.dataTransfer !== null) addLocal(e.dataTransfer.files);
+  });
+
+  root.addEventListener("click", (e) => {
+    const row = e.target.closest("[data-f]");
+    if (row !== null) {
+      select(Number(row.getAttribute("data-f")), true);
+      return;
+    }
+    const z = e.target.closest("[data-z]");
+    if (z === null) return;
+    const kind = z.getAttribute("data-z");
+    if (kind === "fit") fit();
+    else zoomAt(kind === "in" ? 1.2 : 1 / 1.2, cv.clientWidth / 2, cv.clientHeight / 2);
+  });
+
   fit();
-  // 选中可以带在 URL 上：#i=12
-  const initial = /^#i=(\d+)$/.exec(location.hash);
-  if (initial !== null) {
-    const index = Number(initial[1]);
-    if (nodes[index] !== undefined) select(index);
+  const zq = q.get("z");
+  if (zq !== null) {
+    view.z = Number(zq);
+    view.x = BAND.left;
+    view.y = q.get("y") === null ? 0 : Number(q.get("y"));
+    apply();
   }
+  const start = files.findIndex((f) => f.inBatch);
+  select(start < 0 ? 0 : start, q.get("focus") === "1");
   window.addEventListener("resize", fit);
 })();

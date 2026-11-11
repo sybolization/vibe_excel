@@ -9,7 +9,7 @@ import { buildGraph } from "../src/graph.ts";
 import { buildInputs } from "../src/inputs.ts";
 import type { DbTableFact, RunRecord } from "../src/inputs.ts";
 import { renderBook } from "../src/render.ts";
-import { parseTranscript } from "../src/transcript.ts";
+import { conversationTitle, parseConversation, parseTranscript } from "../src/transcript.ts";
 import type { BookView, GraphView } from "../src/types.ts";
 
 const jsonl = (records: unknown[]): string => records.map((record) => JSON.stringify(record)).join("\n");
@@ -66,6 +66,33 @@ describe("parseTranscript", () => {
 
   it("空文件返回 null", () => {
     expect(parseTranscript("a.jsonl", "")).toBeNull();
+  });
+});
+
+describe("parseConversation", () => {
+  const conv = parseConversation("C:\\s\\2026-11-04T08-11-20-122Z_abc.jsonl", TRANSCRIPT);
+
+  it("逐条留消息，工具调用与结果对上", () => {
+    expect(conv).not.toBeNull();
+    expect(conv?.title).toBe("本次任务：按地点汇总");
+    expect(conv?.blocks.map((block) => block.kind)).toEqual(["user", "assistant", "tool", "tool", "tool"]);
+    const tools = conv?.blocks.filter((block) => block.kind === "tool") ?? [];
+    expect(tools.map((block) => block.name)).toEqual(["bash", "write", "edit"]);
+    expect(tools[0]?.brief).toBe("ls");
+    expect(tools[0]?.result).toBe("ok");
+    expect(tools[0]?.ok).toBe(true);
+    // 没有结果记录的工具（会话被中断）按成功算，不能当成失败
+    expect(tools[1]?.ok).toBe(true);
+    expect(tools[1]?.result).toBe("");
+  });
+
+  it("标题去掉 Markdown 的 # 与 BOM，空白回落", () => {
+    expect(conversationTitle("\uFEFF## 标题\n正文")).toBe("标题");
+    expect(conversationTitle("   ")).toBe("未命名对话");
+  });
+
+  it("空文件返回 null", () => {
+    expect(parseConversation("a.jsonl", "")).toBeNull();
   });
 });
 
@@ -148,6 +175,7 @@ describe("renderBook", () => {
     diagram: null,
     transcript: [],
     focusEpisode: null,
+    conversations: [],
   };
 
   it("内联数据与样式，且 </script> 被转义", () => {

@@ -131,6 +131,34 @@ class EpisodeView(TypedDict):
     runId: str | None
 
 
+class ChatBlock(TypedDict):
+    """对话里的一块：人说的一段、agent 说的一段、或者一次工具执行。"""
+
+    kind: Literal["user", "assistant", "tool"]
+    # 这一块发生的时间（ISO）。工具块沿用发起它的那条消息的时间。
+    at: str
+    # 人说 / agent 说的正文，Markdown；工具块为空串。
+    text: str
+    # 工具名与一行简述；非工具块为空串。
+    name: str
+    brief: str
+    # 工具是否成功；没有结果记录（会话被中断）时按成功算。
+    ok: bool
+    ms: Number | None
+    # 工具输出，已截断。
+    result: str
+
+
+class ConversationView(TypedDict):
+    """一场对话：标题取自首条用户消息，正文是逐条消息与工具执行。"""
+
+    id: str
+    title: str
+    start: str
+    end: str
+    blocks: list[ChatBlock]
+
+
 class WriterView(TypedDict):
     """派生表的写出者：函数、文件、耗时与运行短 id。"""
 
@@ -290,6 +318,7 @@ class BookView(TypedDict):
     inputs: InputsView | None
     diagram: DiagramView | None
     transcript: list[EpisodeView]
+    conversations: list[ConversationView]
     # 默认展开的对话 id；关联不到作者记录时取最近一条。
     focusEpisode: str | None
     warnings: NotRequired[list[str]]

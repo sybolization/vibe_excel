@@ -10,7 +10,7 @@ import re
 from pathlib import Path
 
 from ._values import as_list, as_object, basename
-from .types import EpisodeView
+from .types import ChatBlock, ConversationView, EpisodeView
 
 _WRITE_TOOLS = frozenset({"write", "edit", "multiedit", "patch", "apply_patch"})
 _LOG = logging.getLogger(__name__)
@@ -121,3 +121,139 @@ def parse_transcript(
 
 oneLine = one_line
 parseTranscript = parse_transcript
+
+
+_CLIP_TEXT = 4000
+_CLIP_ASSISTANT = 6000
+_CLIP_RESULT = 1400
+_CLIP_BRIEF = 160
+
+
+def clip(text: str, limit: int) -> str:
+    """正文截断：超长时补一句说明，不静默丢内容。"""
+    return f"{text[:limit]}\n\n…（已截断）" if len(text) > limit else text
+
+
+def conversation_title(text: str) -> str:
+    """标题取首条用户消息的第一行，去掉 Markdown 的 #。"""
+    first = text.removeprefix("\ufeff").split("\n", 1)[0]
+    cleaned = re.sub(r"^#+\s*", "", first).strip()
+    return "未命名对话" if not cleaned else cleaned[:40]
+
+
+def _brief_of(args: object) -> str:
+    """工具参数里挑一个最能说明它在干什么的字段。"""
+    record = as_object(args)
+    for key in ("command", "path", "pattern", "query"):
+        value = record.get(key)
+        if isinstance(value, str) and value:
+            return clip(value, _CLIP_BRIEF)
+    return ""
+
+
+def parse_conversation(
+    file: str | Path, text: str, *, warnings: list[str] | None = None
+) -> ConversationView | None:
+    """把一段 JSONL 展开成逐条消息与工具执行。
+
+    和 parse_transcript 读同一份文件，但那份只留片段摘要，这份留逐条消息。
+    工具结果按 toolCallId 回填到对应工具块上；没有结果的按成功算。
+    """
+    blocks: list[ChatBlock] = []
+    pending: dict[str, ChatBlock] = {}
+    first: str | None = None
+    last: str | None = None
+    title = ""
+
+    for line_number, line in enumerate(text.splitlines(), 1):
+        trimmed = line.strip().removeprefix("\ufeff")
+        if not trimmed:
+            continue
+        try:
+            parsed: object = json.loads(trimmed)
+        except json.JSONDecodeError as error:
+            _diagnostic(f"对话 {file}:{line_number} 跳过不完整或无效 JSON：{error.msg}", warnings)
+            continue
+        if not isinstance(parsed, dict):
+            continue
+        record = as_object(parsed)
+        stamp = record.get("timestamp")
+        if isinstance(stamp, str):
+            first = first if first is not None else stamp
+            last = stamp
+        if record.get("type") != "message":
+            continue
+        message = as_object(record.get("message"))
+        role = message.get("role")
+        content = message.get("content")
+        at = stamp if isinstance(stamp, str) else ""
+
+        if role == "user":
+            joined = _text_parts(content).removeprefix("\ufeff")
+            if not joined.strip():
+                continue
+            if not title:
+                title = conversation_title(joined)
+            blocks.append(
+                {
+                    "kind": "user", "at": at, "text": clip(joined, _CLIP_TEXT),
+                    "name": "", "brief": "", "ok": True, "ms": None, "result": "",
+                }
+            )
+            continue
+
+        if role == "assistant":
+            joined = _text_parts(content)
+            if joined.strip():
+                blocks.append(
+                    {
+                        "kind": "assistant", "at": at, "text": clip(joined, _CLIP_ASSISTANT),
+                        "name": "", "brief": "", "ok": True, "ms": None, "result": "",
+                    }
+                )
+            for raw in as_list(content):
+                part = as_object(raw)
+                if part.get("type") != "toolCall":
+                    continue
+                block: ChatBlock = {
+                    "kind": "tool", "at": at, "text": "",
+                    "name": str(part.get("name") or "?"),
+                    "brief": _brief_of(part.get("arguments")),
+                    "ok": True, "ms": None, "result": "",
+                }
+                blocks.append(block)
+                call_id = part.get("id")
+                if isinstance(call_id, str):
+                    pending[call_id] = block
+            continue
+
+        if role == "toolResult":
+            call_id = message.get("toolCallId")
+            block = pending.get(call_id) if isinstance(call_id, str) else None
+            if block is None:
+                continue
+            block["ok"] = message.get("isError") is not True
+            duration = message.get("durationMs")
+            block["ms"] = duration if isinstance(duration, (int, float)) else None
+            result = _text_parts(content)
+            if result:
+                block["result"] = clip(result, _CLIP_RESULT)
+            tool_name = message.get("toolName")
+            if isinstance(tool_name, str) and tool_name:
+                block["name"] = tool_name
+
+    if not blocks:
+        _diagnostic(f"对话 {file} 没有可展示的消息", warnings)
+        return None
+    name = basename(file)
+    return {
+        "id": re.sub(r"\.jsonl$", "", name, flags=re.IGNORECASE),
+        "title": title or "未命名对话",
+        "start": first or "",
+        "end": last or "",
+        "blocks": blocks,
+    }
+
+
+parseConversation = parse_conversation
+conversationTitle = conversation_title

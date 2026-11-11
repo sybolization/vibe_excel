@@ -111,6 +111,34 @@ export interface EpisodeView {
  *   derive      —— 流程节点用别的表算出来的，靠 run.json 的 reads/writes 顺着追；
  *   unknown     —— 库里有，但上面三条都追不到。
  */
+/** 对话里的一块：人说的一段、agent 说的一段、或者一次工具执行。 */
+export type ChatBlockKind = "user" | "assistant" | "tool";
+
+export interface ChatBlock {
+  kind: ChatBlockKind;
+  /** 这一块发生的时间（ISO）。工具块沿用发起它的那条消息的时间。 */
+  at: string;
+  /** 人说 / agent 说的正文，Markdown；工具块为空。 */
+  text: string;
+  /** 工具名与一行简述；非工具块为空串。 */
+  name: string;
+  brief: string;
+  /** 工具是否成功；没有结果记录时按成功算。 */
+  ok: boolean;
+  ms: number | null;
+  /** 工具输出，已截断。 */
+  result: string;
+}
+
+/** 一场对话：标题取自首条用户消息，正文是逐条消息与工具执行。 */
+export interface ConversationView {
+  id: string;
+  title: string;
+  start: string;
+  end: string;
+  blocks: ChatBlock[];
+}
+
 export type SeedKind = "materialize" | "import" | "derive" | "unknown";
 
 /** 派生表的写出者：哪个运行里的哪个节点。 */
@@ -172,6 +200,8 @@ export interface InputsView {
   orphans: InputTableView[];
   readTables: number;
   writeTables: number;
+  /** 读库或读文件降级时留下的诊断；没有就不是空数组，是没测到。 */
+  warnings?: string[];
 }
 
 export interface RevisionView {
@@ -251,4 +281,7 @@ export interface BookView {
   diagram: DiagramView | null;
   transcript: EpisodeView[];
   focusEpisode: string | null;
+  conversations: ConversationView[];
+  /** 采集阶段的诊断，渲染成页面右上角可折叠的一块。 */
+  warnings?: string[];
 }

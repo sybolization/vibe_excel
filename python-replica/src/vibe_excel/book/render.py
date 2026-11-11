@@ -4,6 +4,7 @@
 视图模型会嵌入 <script> 标签，因此序列化结果必须先转义再拼接。
 """
 
+import re
 from html import escape
 from pathlib import Path
 
@@ -21,6 +22,11 @@ def _asset(name: str) -> str:
         raise VibeError(f"缺少内置的 book 资源 {name}：{error}") from error
 
 
+def inline(source: str) -> str:
+    """内联脚本里若出现 </script，浏览器会提前收尾；统一挡掉。"""
+    return re.sub(r"</script", r"<\\/script", source, flags=re.IGNORECASE)
+
+
 def render_book(view: BookView) -> str:
     """把 book 视图模型渲染成单文件 HTML。
 
@@ -28,6 +34,7 @@ def render_book(view: BookView) -> str:
     保证可选页面缺失时仍能浏览其余内容。
     """
     css, js = _asset("app.css"), _asset("app.js")
+    marked, chat = _asset("vendor/marked.min.js"), _asset("chat.js")
     # 内联 JSON 中的 < 与行分隔符必须转义，否则 </script> 会提前闭合脚本标签。
     payload = escape_for_script(json_text(view))
     program = view["program"]["name"] if view["program"] is not None else "book"
@@ -53,7 +60,7 @@ def render_book(view: BookView) -> str:
 <title>{escape(program)} · book</title>
 <style>
 {css}
-#book-warnings{{position:fixed;top:12px;right:12px;z-index:1000;max-width:min(640px,90vw);max-height:60vh;overflow:auto;background:var(--panel);border:1px solid var(--amber);border-radius:6px;padding:8px 12px;color:var(--ink)}}
+#book-warnings{{position:fixed;top:12px;right:calc(var(--cw, 360px) + 12px);z-index:1000;max-width:min(640px,90vw);max-height:60vh;overflow:auto;background:var(--panel);border:1px solid var(--amber);border-radius:6px;padding:8px 12px;color:var(--ink)}}
 #book-warnings summary{{cursor:pointer;color:var(--amber)}}
 #book-warnings li{{margin:6px 0;overflow-wrap:anywhere}}
 </style>
@@ -62,7 +69,13 @@ def render_book(view: BookView) -> str:
 <div id="root"></div>
 {diagnostics}<script type="application/json" id="book-data">{payload}</script>
 <script>
-{js}
+{inline(marked)}
+</script>
+<script>
+{inline(js)}
+</script>
+<script>
+{inline(chat)}
 </script>
 </body>
 </html>

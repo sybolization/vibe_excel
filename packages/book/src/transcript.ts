@@ -8,7 +8,7 @@
 
 import { basename } from "node:path";
 
-import type { EpisodeView } from "./types.ts";
+import type { ChatBlock, ConversationView, EpisodeView } from "./types.ts";
 
 const WRITE_TOOLS = new Set(["write", "edit", "multiedit", "patch", "apply_patch"]);
 
@@ -116,5 +116,122 @@ export function parseTranscript(file: string, text: string): EpisodeView | null 
     writes,
     records,
     runId: null,
+  };
+}
+
+/** 正文截断：超长加一句说明，不静默丢内容。 */
+export function clip(text: string, limit: number): string {
+  return text.length > limit ? `${text.slice(0, limit)}\n\n…（已截断）` : text;
+}
+
+/** 标题取首条用户消息的第一行，去掉 Markdown 的 `#`。 */
+export function conversationTitle(text: string): string {
+  const first = (text.replace(/^\uFEFF/, "").split(/\r?\n/)[0] ?? "").replace(/^#+\s*/, "").trim();
+  return first === "" ? "未命名对话" : first.slice(0, 40);
+}
+
+function briefOf(args: unknown): string {
+  if (args === null || typeof args !== "object") return "";
+  const record = args as Record<string, unknown>;
+  for (const key of ["command", "path", "pattern", "query"]) {
+    const value = record[key];
+    if (typeof value === "string" && value !== "") return clip(value, 160);
+  }
+  return "";
+}
+
+/**
+ * 把一段 jsonl 解析成一场对话：用户消息、助手正文、每一次工具执行。
+ *
+ * 和 `parseTranscript` 读同一个文件，但那份只留片段摘要，这份留逐条消息。
+ * 工具结果按 `toolCallId` 回填到对应工具块上；没有结果的（会话被中断）按成功算。
+ */
+export function parseConversation(file: string, text: string): ConversationView | null {
+  const id = basename(file).replace(/\.jsonl$/i, "");
+  const blocks: ChatBlock[] = [];
+  const pending = new Map<string, ChatBlock>();
+  let start: string | null = null;
+  let end: string | null = null;
+  let title = "";
+
+  for (const line of text.split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (trimmed === "") continue;
+    let record: Record<string, unknown>;
+    try {
+      const parsed: unknown = JSON.parse(trimmed);
+      if (parsed === null || typeof parsed !== "object") continue;
+      record = parsed as Record<string, unknown>;
+    } catch {
+      continue;
+    }
+    const stamp = record["timestamp"];
+    if (typeof stamp === "string") {
+      if (start === null) start = stamp;
+      end = stamp;
+    }
+    if (record["type"] !== "message") continue;
+    const message = record["message"];
+    if (message === null || typeof message !== "object") continue;
+    const body = message as Record<string, unknown>;
+    const content = body["content"];
+    const at = typeof stamp === "string" ? stamp : "";
+
+    if (body["role"] === "user") {
+      const joined = textParts(content).join("\n").replace(/^\uFEFF/, "");
+      if (joined.trim() === "") continue;
+      if (title === "") title = conversationTitle(joined);
+      blocks.push({ kind: "user", at, text: clip(joined, 4000), name: "", brief: "", ok: true, ms: null, result: "" });
+      continue;
+    }
+
+    if (body["role"] === "assistant") {
+      const joined = textParts(content).join("\n");
+      if (joined.trim() !== "") {
+        blocks.push({ kind: "assistant", at, text: clip(joined, 6000), name: "", brief: "", ok: true, ms: null, result: "" });
+      }
+      if (!Array.isArray(content)) continue;
+      for (const part of content) {
+        if (part === null || typeof part !== "object") continue;
+        const call = part as Record<string, unknown>;
+        if (call["type"] !== "toolCall") continue;
+        const block: ChatBlock = {
+          kind: "tool",
+          at,
+          text: "",
+          name: String(call["name"] ?? "?"),
+          brief: briefOf(call["arguments"]),
+          ok: true,
+          ms: null,
+          result: "",
+        };
+        blocks.push(block);
+        const callId = call["id"];
+        if (typeof callId === "string") pending.set(callId, block);
+      }
+      continue;
+    }
+
+    if (body["role"] === "toolResult") {
+      const callId = body["toolCallId"];
+      const block = typeof callId === "string" ? pending.get(callId) : undefined;
+      if (block === undefined) continue;
+      block.ok = body["isError"] !== true;
+      const ms = body["durationMs"];
+      block.ms = typeof ms === "number" ? ms : null;
+      const result = textParts(content).join("\n");
+      if (result !== "") block.result = clip(result, 1400);
+      const toolName = body["toolName"];
+      if (typeof toolName === "string" && toolName !== "") block.name = toolName;
+    }
+  }
+
+  if (blocks.length === 0) return null;
+  return {
+    id,
+    title: title === "" ? "未命名对话" : title,
+    start: start ?? "",
+    end: end ?? "",
+    blocks,
   };
 }
