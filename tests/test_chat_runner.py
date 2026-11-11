@@ -352,6 +352,58 @@ def test_wake_during_a_turn_is_not_saved_as_user_text(
     assert user_texts == ["老问题", "用户的问题"]
 
 
+def test_subscribe_replays_what_already_happened(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """页面晚连上来时，这一轮已经发生的事件要先补给它。"""
+    store, session, program = _make_conversation(tmp_path)
+    runner = _runner_with(
+        monkeypatch,
+        [
+            {"type": "thinking", "delta": "想一下"},
+            {"type": "call", "id": "c1", "name": "bash", "brief": "ls"},
+            {"type": "result", "id": "c1", "ok": "1", "text": "a.txt", "ms": "12"},
+            {"type": "text", "delta": "答"},
+            {"type": "reply", "text": "答", "thinking": "想一下", "calls": "[]"},
+        ],
+    )
+
+    first = runner.send(store, session, program, "问一句")
+    conversation_id = first["conversationId"]
+    deadline = time.time() + 5
+    while time.time() < deadline and runner.state(conversation_id)["busy"]:
+        time.sleep(0.02)
+
+    events, backlog = runner.subscribe(conversation_id)
+    try:
+        kinds = [item["type"] for item in backlog]
+        assert kinds[0] == "start", kinds
+        assert {"thinking", "call", "result", "text", "done"} <= set(kinds), kinds
+        # 订阅之后的新事件要真的送到队列里
+        runner._publish(runner._conversations[conversation_id], {"type": "text", "delta": "后续"})  # noqa: SLF001
+        delivered = events.get(timeout=2)
+        assert delivered["delta"] == "后续"
+    finally:
+        runner.unsubscribe(conversation_id, events)
+
+
+def test_state_reports_queue_and_busy(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """页面靠 state 判断「还能不能发」和「排了几条」。"""
+    store, session, program = _make_conversation(tmp_path)
+    runner = _runner_with(monkeypatch, [{"type": "text", "delta": "答"}, {"type": "reply", "text": "答", "thinking": "", "calls": "[]"}])
+
+    result = runner.send(store, session, program, "第一句")
+    conversation_id = result["conversationId"]
+    state = runner.state(conversation_id)
+    assert set(state) == {"busy", "queued"}, state
+    assert isinstance(state["queued"], int)
+
+    deadline = time.time() + 5
+    while time.time() < deadline and runner.state(conversation_id)["busy"]:
+        time.sleep(0.02)
+    assert runner.state(conversation_id)["busy"] is False
+
+
 def test_send_rejects_empty_message(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     store, session, program = _make_conversation(tmp_path)
     runner = _runner_with(monkeypatch, [])
