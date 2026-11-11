@@ -30,6 +30,8 @@ from .jobs import Finished, Watcher, ensure_helper, snapshot, wake_text
 
 # 页面跟不上时宁可丢事件，也不要把跑着的 agent 卡住
 _MAX_QUEUED_EVENTS = 400
+# 连着被唤醒这么多次还没人说话，就先停手：免得 job 唤醒自己又起新 job，转成死循环
+_MAX_WAKES = 3
 
 
 def _now() -> str:
@@ -58,6 +60,8 @@ class _Conversation:
     busy: bool = False
     turn: _Turn = field(default_factory=_Turn)
     subscribers: list[queue.Queue[dict[str, Any]]] = field(default_factory=list)
+    # 连着被 job 唤醒几次：人一说话就清零。防止「唤醒→又起 job→又唤醒」自己转起来
+    wakes: int = 0
     recent: list[dict[str, Any]] = field(default_factory=list)
     lock: threading.Lock = field(default_factory=threading.Lock)
 
@@ -143,6 +147,8 @@ class Runner:
             raise VibeError("说点什么再发")
         conversation = self._ensure(store, session_id, program, conversation_id, new)
         conversation.program = program
+        # 人说话了：唤醒计数重来
+        conversation.wakes = 0
         with conversation.lock:
             conversation.pending.append(clean)
             start = not conversation.busy
@@ -224,6 +230,14 @@ class Runner:
             return
         if finished is not None:
             append_message(conversation.path, "note", "后台任务结束，把结果交给 agent")
+            if conversation.wakes >= _MAX_WAKES:
+                append_message(
+                    conversation.path,
+                    "note",
+                    "连续唤醒次数到上限，这次不再唤醒；等用户说话再继续",
+                )
+                return
+            conversation.wakes += 1
             self._wake(conversation, wake_text(finished))
         elif dropped is not None:
             append_message(conversation.path, "note", f"后台任务 {dropped} 超时或超出上限，已放弃")

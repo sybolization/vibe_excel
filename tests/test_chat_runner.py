@@ -207,6 +207,43 @@ def test_wake_runs_another_turn_without_a_fake_user_message(
     assert user_texts == ["老问题", "先问一句"], "唤醒不该伪造一条用户发言"
 
 
+def test_wake_loop_stops_after_limit(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """唤醒次数到上限就不再唤醒：不能自己转成无休止的循环。"""
+    store, session, program = _make_conversation(tmp_path)
+    prompts: list[str] = []
+
+    def fake_stream(_config: Any, messages: list[dict[str, str]], **_kwargs: Any) -> Iterator[dict[str, str]]:
+        prompts.append(messages[-1]["content"])
+        yield {"type": "text", "delta": "好"}
+        yield {"type": "reply", "text": "好", "thinking": "", "calls": "[]"}
+
+    monkeypatch.setattr(chat_runner, "stream_events", fake_stream)
+    monkeypatch.setattr(chat_runner, "snapshot", lambda _workspace: "")
+    monkeypatch.setattr(chat_runner, "ensure_helper", lambda _workspace: None)
+    runner = Runner()
+
+    result = runner.send(store, session, program, "第一句")
+    conversation_id = result["conversationId"]
+    conversation = runner._conversations[conversation_id]  # noqa: SLF001
+
+    deadline = time.time() + 5
+    while time.time() < deadline and runner.state(conversation_id)["busy"]:
+        time.sleep(0.02)
+
+    from vibe_excel.book.jobs import Finished
+
+    for index in range(5):
+        runner._on_job(  # noqa: SLF001
+            conversation.workspace, Finished(job=f"j{index}", code=0, text="x"), None
+        )
+        deadline = time.time() + 5
+        while time.time() < deadline and runner.state(conversation_id)["busy"]:
+            time.sleep(0.02)
+
+    assert conversation.wakes == 3, "唤醒次数要卡在上限"
+    assert len(prompts) <= 4, f"唤醒只该跑有限次，实际 {len(prompts)}"
+
+
 def test_send_rejects_empty_message(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     store, session, program = _make_conversation(tmp_path)
     runner = _runner_with(monkeypatch, [])
