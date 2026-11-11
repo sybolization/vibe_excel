@@ -21,6 +21,8 @@ from .render import _ASSETS, render_book
 from .types import BookView, ProjectSummary
 
 USAGE = (
+    "serve --store <store 目录> [--store ...] [--port 8731] [--no-open]\n"
+    "        起本地服务：现场采集页面，导入/删除/撤回/重建批次走接口\n"
     "build --store <store 目录> [--store ...] --out <html 路径 | 站点目录>"
     " [--session <会话 id>] [--run <运行 id>]\n"
     "        --store 可以给多次，多个 store 合成一个索引；\n"
@@ -156,12 +158,50 @@ def _build_site(stores: list[Path], out: Path) -> int:
     return 0
 
 
+def _run_serve(argv: list[str]) -> int:
+    """serve 子命令：解析参数后起服务，阻塞到 Ctrl+C。"""
+    stores: list[Path] = []
+    port = 8731
+    open_browser = True
+    index = 1
+    while index < len(argv):
+        token = argv[index]
+        if token not in ("--store", "--port", "--no-open"):
+            raise VibeError(f"未知参数 {token}\n用法：{USAGE}")
+        if token == "--no-open":
+            open_browser = False
+            index += 1
+            continue
+        if index + 1 == len(argv) or argv[index + 1].startswith("--"):
+            raise VibeError(f"参数 {token} 缺少值\n用法：{USAGE}")
+        value = argv[index + 1]
+        if token == "--store":
+            stores.append(Path(value).resolve())
+        else:
+            try:
+                port = int(value)
+            except ValueError as error:
+                raise VibeError(f"--port 需要整数：{value}") from error
+        index += 2
+    if not stores:
+        raise VibeError(f"缺少参数 --store\n用法：{USAGE}")
+    from .serve import serve
+
+    return serve(stores, port=port, open_browser=open_browser)
+
+
 def run_cli(argv: list[str]) -> int:
     """执行一次导出：采集视图模型、渲染 HTML、落盘并打印摘要。
 
     已知的用户错误与 I/O 错误统一转成返回码 1，不向调用方抛出。
     """
-    if argv in (["--help"], ["-h"], ["build", "--help"], ["build", "-h"]):
+    if argv and argv[0] == "serve" and argv not in (["serve", "--help"], ["serve", "-h"]):
+        try:
+            return _run_serve(argv)
+        except (VibeError, OSError) as error:
+            print(str(error), file=sys.stderr)
+            return 1
+    if argv in (["--help"], ["-h"], ["build", "--help"], ["build", "-h"], ["serve", "--help"]):
         print(f"用法：{USAGE}\n产出：一个自包含的 HTML 账页，或一个可离线打开的站点目录")
         return 0
     try:
