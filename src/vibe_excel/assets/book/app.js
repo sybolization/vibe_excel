@@ -914,9 +914,11 @@ if (location.search.includes("selftest")) {
       button.disabled = true;
       box.querySelector(".ask-e").textContent = "";
       try {
+        // 只报是哪个项目、哪个文件：物化出哪些表、牵动哪些步骤，由服务端算，
+        // 这样包里的链路和页面上变灰的链路必定是同一份。
         const data = await postJson("/api/inputs/delete", {
           name,
-          tables: tables.map((r2) => ({ name: r2.name, sheet: r2.sheet })),
+          programId: V.program === null || V.program === undefined ? "" : V.program.id,
         });
         closeAsk();
         applyState(data.state);

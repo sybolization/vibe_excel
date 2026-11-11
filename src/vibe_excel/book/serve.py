@@ -12,6 +12,7 @@ from __future__ import annotations
 import io
 import json
 import threading
+from collections.abc import Mapping
 from contextlib import redirect_stderr, redirect_stdout
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -51,6 +52,66 @@ _LOCK = threading.Lock()
 
 def _json(payload: dict[str, Any]) -> bytes:
     return json.dumps(payload, ensure_ascii=False).encode("utf-8")
+
+
+def impact_from_view(
+    view: Mapping[str, Any], file_name: str
+) -> tuple[list[dict[str, object]], dict[str, object]]:
+    """算「移出这个文件」牵动了什么：它物化出的表、下游每一步、最终产物。
+
+    页面上的灰链和包里写给 agent 的链路必须是同一份数据，否则两边会各说各话。
+    纯函数：给一份视图就能算，不依赖 store，方便单独验。
+    """
+    empty: tuple[list[dict[str, object]], dict[str, object]] = ([], {})
+    inputs = view.get("inputs") or {}
+    target = next((item for item in inputs.get("files") or [] if item.get("name") == file_name), None)
+    if target is None:
+        return empty
+    tables: list[dict[str, object]] = []
+    seeds: list[str] = []
+    for row in list(target.get("direct") or []) + list(target.get("derived") or []):
+        tables.append({"table": row.get("name"), "sheet": row.get("sheet")})
+        if row.get("name"):
+            seeds.append(str(row["name"]))
+    if not seeds:
+        return empty
+    graph = view.get("graph") or {}
+    nodes = list(graph.get("nodes") or [])
+    touched = set(seeds)
+    steps: list[dict[str, object]] = []
+    # 按「谁读了受影响的表」一层层推进：一步只算一次，读到就算牵连
+    alive = list(nodes)
+    while True:
+        moved = False
+        rest: list[Any] = []
+        for node in alive:
+            reads = [str(item) for item in (node.get("reads") or [])]
+            if any(item in touched for item in reads):
+                writes = [str(item) for item in (node.get("writes") or [])]
+                touched.update(writes)
+                steps.append({"fn": node.get("fn"), "reads": reads, "writes": writes})
+                moved = True
+                continue
+            rest.append(node)
+        if not moved:
+            break
+        alive = rest
+    chain: dict[str, object] = {"tables": seeds, "steps": steps}
+    outputs = [str(item) for item in (graph.get("outputs") or []) if str(item) in touched]
+    if outputs:
+        chain["outputs"] = outputs
+    return tables, chain
+
+
+def _impact(store: Path, program_id: str, file_name: str) -> tuple[list[dict[str, object]], dict[str, object]]:
+    """从 store 里采集一份视图再算影响面；采不到就当作没有影响面。"""
+    if not program_id or not file_name:
+        return [], {}
+    try:
+        view = collect_book(store, program_id=program_id)
+    except VibeError:
+        return [], {}
+    return impact_from_view(view, file_name)
 
 
 def _rebuild_batch() -> dict[str, object]:
@@ -247,13 +308,11 @@ class _Handler(BaseHTTPRequestHandler):
         if path == "/api/inputs/delete":
             payload = json.loads(body or b"{}")
             ground = resolve_ground_truth()
-            event = remove_file(
-                ground,
-                store,
-                str(payload.get("name") or ""),
-                tables=payload.get("tables") or [],
-                chain=payload.get("chain") or {},
-            )
+            name = str(payload.get("name") or "")
+            # 影响面由服务端从同一份视图里算：页面只说是哪个文件。
+            # 链路要写给将来的 agent 看，不能靠前端传上来一份可能对不上的。
+            tables, chain = _impact(store, str(payload.get("programId") or ""), name)
+            event = remove_file(ground, store, name, tables=tables, chain=chain)
             self._api({"ok": True, "event": event, "state": self._state()})
             return
         if path == "/api/inputs/undo":
