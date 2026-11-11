@@ -22,7 +22,6 @@ from typing import Any, cast
 from urllib.parse import parse_qs, unquote, urlparse
 
 from ..util import VibeError
-from .chat import send_stream as chat_stream
 from .chat_runner import Runner
 from .collect import collect_book
 from .index_render import render_index
@@ -388,10 +387,6 @@ class _Handler(BaseHTTPRequestHandler):
                     {**self.runner.stop(conversation_id), "state": self.runner.state(conversation_id)}
                 )
                 return
-            if path == "/api/chat/stream":
-                # 等模型说话是长动作，不能占着全局锁：不然这十几秒里导入/移出全都动不了
-                self._chat_stream(body)
-                return
             with _LOCK:
                 self._mutate(path, body)
         except VibeError as error:
@@ -438,56 +433,6 @@ class _Handler(BaseHTTPRequestHandler):
             return
         finally:
             self.runner.unsubscribe(conversation_id, incoming)
-
-    def _chat_stream(self, body: bytes) -> None:
-        """边算边写：一行一个 JSON，前端按行读。"""
-        started = False
-        try:
-            payload = self._payload(body)
-            program_id = str(payload.get("programId") or "").strip()
-            if not program_id:
-                raise VibeError("缺少 programId")
-            owner = self._store_of(program_id)
-            project = next(
-                (item for item in collect_projects(owner) if str(item["id"]) == program_id), None
-            )
-            session_id = "" if project is None else str(project.get("activeSessionId") or "")
-            if not session_id:
-                raise VibeError("这个项目还没有可写对话的会话")
-            self.send_response(200)
-            self.send_header("Content-Type", "application/x-ndjson; charset=utf-8")
-            self.send_header("Cache-Control", "no-store")
-            self.send_header("X-Accel-Buffering", "no")
-            self.end_headers()
-            self.close_connection = True
-            started = True
-            stream = chat_stream(
-                owner,
-                session_id,
-                str(project.get("name") or "") if project else "",
-                str(payload.get("text") or ""),
-                conversation_id=str(payload.get("conversationId") or "") or None,
-                new=payload.get("new") is True,
-                events=events(owner)[-8:],
-                context=_chat_context(owner, program_id),
-            )
-            for event in stream:
-                self.wfile.write((json.dumps(event, ensure_ascii=False) + "\n").encode("utf-8"))
-                self.wfile.flush()
-        except (BrokenPipeError, ConnectionResetError):
-            # 页面关了或者刷新了：没人接收就停下，但用户说的话已经落盘了
-            return
-        except VibeError as error:
-            if started:
-                try:
-                    self.wfile.write(
-                        (json.dumps({"type": "error", "error": str(error)}, ensure_ascii=False) + "\n").encode("utf-8")
-                    )
-                    self.wfile.flush()
-                except (BrokenPipeError, ConnectionResetError):
-                    return
-            else:
-                self._api({"ok": False, "error": str(error)}, status=400)
 
     def _store_of(self, program_id: str) -> Path:
         """按项目 id 找到它所在的工作区（站点可能同时挂着好几个）。"""

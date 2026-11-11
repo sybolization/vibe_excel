@@ -618,58 +618,6 @@ def ask(config: ChatConfig, messages: list[dict[str, str]]) -> str:
     return text.strip()
 
 
-def send_stream(
-    store: Path,
-    session_id: str,
-    program: str,
-    text: str,
-    *,
-    conversation_id: str | None = None,
-    new: bool = False,
-    events: Sequence[dict[str, Any]] = (),
-    context: dict[str, Any] | None = None,
-) -> Iterator[dict[str, str]]:
-    """流式版本：先落问题，再吐增量，最后落回答。
-
-    出错时问题已经留在文件里了——用户打完字凭空消失，比看到一条失败更糟。
-    """
-    clean = text.strip()
-    if not clean:
-        raise VibeError("说点什么再发")
-    directory = session_directory(store, session_id)
-    path = pick_conversation(directory, None if new else conversation_id)
-    append_message(path, "user", clean)
-    history = read_messages(path)
-    prompt = system_prompt(program, events, context, workspace=store)
-    messages = [{"role": "system", "content": prompt}, *history]
-    thinking = ""
-    answer = ""
-    calls: list[dict[str, Any]] = []
-    try:
-        for event in stream_events(ChatConfig.from_env(), messages, workspace=store):
-            if event.get("type") == "reply":
-                answer = event.get("text", "")
-                thinking = event.get("thinking", "")
-                raw_calls = event.get("calls")
-                if isinstance(raw_calls, str) and raw_calls:
-                    parsed = json.loads(raw_calls)
-                    if isinstance(parsed, list):
-                        calls = [item for item in parsed if isinstance(item, dict)]
-                continue
-            yield event
-    except VibeError as error:
-        yield {"type": "error", "error": str(error)}
-        return
-    # 按发生的顺序落盘：思考 → 每次工具调用与结果 → 最后那段回答
-    if thinking:
-        append_message(path, "assistant", "", thinking=thinking)
-    for call in calls:
-        append_tool_call(path, call)
-    if answer:
-        append_message(path, "assistant", answer)
-    yield {"type": "done", "conversationId": path.stem, "reply": answer}
-
-
 def send(
     store: Path,
     session_id: str,
