@@ -1,8 +1,9 @@
 """本地服务：现场采集页面 + 构建期输入的增删接口。
 
 - 页面不落盘：每次请求重新读 ``control.db`` 和运行目录，刷新即最新
-- 只有 ``/api/inputs/*`` 会写东西，且只写三处：ground-truth 目录、清单名单、
-  ``<store>`` 下的 ``input-events.jsonl`` 与 ``.trash/.archive``
+- 写接口只有 ``/api/inputs/*`` 与 ``/api/projects/archive``：前者写 ground-truth 目录、
+  清单名单、``input-events.jsonl`` 与 ``.trash/.archive``；后者把项目目录移进
+  ``.archive/projects``、写 ``project-events.jsonl`` 并在 control.db 记一行归档
 - 只绑 127.0.0.1，默认端口 8731
 """
 
@@ -15,7 +16,7 @@ from contextlib import redirect_stderr, redirect_stdout
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import unquote, urlparse
 
 from ..util import VibeError
 from .collect import collect_book
@@ -32,7 +33,9 @@ from .inputs_edit import (
     undo_removal,
 )
 from .projects import collect_projects, page_name
+from .projects_edit import archive_project
 from .render import _ASSETS, render_book
+from .types import ProjectSummary
 
 __all__ = ["serve"]
 
@@ -91,7 +94,7 @@ class _Handler(BaseHTTPRequestHandler):
 
     def _index_html(self) -> str:
         multi = len(self.stores) > 1
-        pairs: list[tuple[Path, dict[str, Any]]] = []
+        pairs: list[tuple[Path, ProjectSummary]] = []
         for store in self.stores:
             for project in collect_projects(store):
                 if multi:
@@ -100,7 +103,9 @@ class _Handler(BaseHTTPRequestHandler):
                 pairs.append((store, project))
         label = self.stores[0].name if not multi else f"{len(self.stores)} 个 store"
         pages = {str(project["id"]): page_name(str(project["id"])) for _, project in pairs}
-        return render_index([project for _, project in pairs], store_label=label, pages=pages)
+        return render_index(
+            [project for _, project in pairs], store_label=label, pages=pages, can_archive=True
+        )
 
     def _project_html(self, name: str) -> str | None:
         for store in self.stores:
@@ -112,7 +117,15 @@ class _Handler(BaseHTTPRequestHandler):
                     program_id=str(project["id"]),
                     session_id=project["activeSessionId"],
                 )
-                return render_book(view, fonts="fonts/", home="index.html")
+                state = self._state()
+                # 项目页是服务现场渲染的：把输入运行态一起带上，导入/删除才不是死的。
+                # 输入目录不可用时根开关跟着关掉，按钮灰着比点下去报错诚实。
+                runtime = {
+                    "mode": "live",
+                    "editable": state.get("editable") is True,
+                    "inputs": state,
+                }
+                return render_book(view, fonts="fonts/", home="index.html", runtime=runtime)
         return None
 
     # ---- 状态 ----
@@ -177,10 +190,39 @@ class _Handler(BaseHTTPRequestHandler):
         except OSError as error:
             self._api({"ok": False, "error": str(error)}, status=500)
 
+    def _store_of(self, program_id: str) -> Path:
+        """站点可能合并多个 store：按项目 id 找到它所在的那个。"""
+        for store in self.stores:
+            if any(str(project["id"]) == program_id for project in collect_projects(store)):
+                return store
+        raise VibeError(f"项目不存在或已归档：{program_id}")
+
+    def _payload(self, body: bytes) -> dict[str, Any]:
+        """归档接口的 JSON 入参；坏请求也要回一句人话，而不是断开连接。"""
+        try:
+            payload = json.loads(body or b"{}")
+        except json.JSONDecodeError as error:
+            raise VibeError(f"请求体不是合法 JSON：{error}") from error
+        if not isinstance(payload, dict):
+            raise VibeError("请求体必须是 JSON 对象")
+        return payload
+
     def _mutate(self, path: str, body: bytes) -> None:
         store = self.stores[0]
+        if path == "/api/projects/archive":
+            payload = self._payload(body)
+            program_id = str(payload.get("programId") or "").strip()
+            if not program_id:
+                raise VibeError("缺少 programId")
+            target = self._store_of(program_id)
+            event = archive_project(
+                target, program_id, reason=str(payload.get("reason") or "")
+            )
+            self._api({"ok": True, "event": event, "state": self._state()})
+            return
         if path == "/api/inputs/upload":
-            name = self.headers.get("X-Filename") or ""
+            # 前端把文件名 percent-encode 后放进 header：非 ASCII 直接塞 header 会被浏览器拒绝
+            name = unquote(self.headers.get("X-Filename") or "")
             ground = resolve_ground_truth()
             result = add_file(ground, name, body)
             self._api({"ok": True, "file": result, "state": self._state()})

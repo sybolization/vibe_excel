@@ -20,7 +20,7 @@ import os
 import re
 import shutil
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 import yaml
@@ -58,7 +58,7 @@ class GroundTruth:
 
 
 def _now() -> str:
-    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
+    return datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
 
 
 def _stamp() -> str:
@@ -359,7 +359,7 @@ def undo_removal(ground_truth: GroundTruth, store: Path) -> dict[str, object]:
     except OSError:
         shutil.move(str(restored), str(archived))
         raise
-    event = {"kind": "undo", "at": _now(), "file": name, "trash": str(bucket)}
+    event: dict[str, object] = {"kind": "undo", "at": _now(), "file": name, "trash": str(bucket)}
     _append_event(store, event)
     return event
 

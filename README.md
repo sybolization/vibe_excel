@@ -13,15 +13,20 @@ cd C:\project\vibe_excel-python
 .\start.ps1
 ```
 
-默认三步：在数据目录下找 store → 渲染站点 → 打开索引页。
-产物落在 `..\site\`（`index.html` + 每个项目一页 + `fonts/`）。
+默认：找到 store → 起本地服务 → 打开 `http://127.0.0.1:8731/`。
 双击 `start.cmd` 等价于不带参数运行，能绕开脚本执行策略。
+
+**为什么要起服务**：页面上「导入 / 移出 / 撤回 / 重建输入批次」这些动作要写磁盘
+（ground-truth 目录、清单名单、store 里的归档与事件），静态 HTML 做不到。
+双击导出的 `index.html` 仍然能看，只是这些按钮会置灰并说明原因。
 
 | 参数 | 作用 |
 | --- | --- |
 | `-Store <目录>` | 指定 store，**可给多个**，合并成一张项目列表 |
 | `-Root <目录>` | 换个位置找 store，默认是仓库的上一级 |
-| `-Full` | 从零跑一轮：setup → run → publish → 出站点（只接一个 store） |
+| `-Build` | 只导出静态站点到 `..\site\`，不起服务（发给别人看用） |
+| `-Port` | 服务端口，默认 8731 |
+| `-Full` | 从零跑一轮：setup → run → publish（只接一个 store） |
 | `-Status` | 只打印每个 store 的状态，不生成文件 |
 | `-Test` | 跑测试 |
 | `-NoOpen` | 生成但不打开浏览器 |
@@ -66,6 +71,18 @@ uv run pytest
 | `VIBE_EXCEL_GROUND_TRUTH` | 输入批次目录（`setup` 必需） |
 | `VIBE_EXCEL_AS_OF` | 固定业务日期（默认 `2026-01-01`） |
 | `VIBE_EXCEL_MANIFEST` | 覆盖默认清单路径 |
+
+## 构建期输入（导入 / 移出 / 撤回）
+
+只在项目页、只在服务模式下可用。导入的文件写进清单 `sessions.inputs.dir` 指向的目录，
+同时把文件名登记进 `inputs.files`——`setup` 只认这份名单，不登记等于没导入。
+
+移出不是真删：文件先进 `<store>/.trash/<时间戳>/`，同目录写一份 `packet.json`
+（文件元信息、它物化出的表、受影响的链路、移出理由）；重建批次成功后转进
+`<store>/.archive/<时间戳>/` 长期保留，agent 改脚本时还能读回原文。
+事件流水在 `<store>/input-events.jsonl`。
+
+页面上「已移出」的链路会整条变灰但仍可点开——历史是历史，不能装作没发生。
 
 ## 只读导出
 

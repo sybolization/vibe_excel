@@ -13,6 +13,22 @@
   const E = R.edges;
   const G = V.graph;
   const I = V.inputs;
+  /* 页面是服务托管的，还是 build 出来的静态文件？
+     静态文件没有后台，导入/删除只能置灰——把能力缺失说清楚，好过让人以为点了会生效。 */
+  const RT = (() => {
+    const el = document.getElementById("book-runtime");
+    if (el === null) return { mode: "static" };
+    try { return JSON.parse(el.textContent); } catch { return { mode: "static" }; }
+  })();
+  const LIVE = RT.mode === "live" && RT.editable === true;
+  /* 运行态里的输入快照：约定放在 inputs 下，但也容忍直接把 state 摊平传进来——
+     一旦这里判错，整条链路会被误判成「已移出」，所以两种形状都认。
+     注意这是函数不是常量：每次操作后 RT.inputs 会被换成服务端的新快照。 */
+  const ground = () => {
+    if (!LIVE) return null;
+    if (RT.inputs !== undefined && RT.inputs !== null) return RT.inputs;
+    return RT.files !== undefined ? RT : null;
+  };
   const q = new URLSearchParams(location.search);
   /* 主题：?t= 显式指定则听它；否则跟随系统。默认浅色。 */
   const THEME_KEY = "vibe-book-theme";
@@ -46,7 +62,13 @@
   const esc = (v) => String(v ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
   const num = (n) => (n === null || n === undefined ? "—" : Number(n).toLocaleString("en-US"));
   const dur = (v) => (v === null || v === undefined ? "—" : v < 1000 ? `${Math.round(v)} ms` : `${(v / 1000).toFixed(1)} s`);
-  const kb = (n) => (n === null || n === undefined ? "—" : n < 1048576 ? `${Math.round(n / 1024)} KB` : `${Math.round(n / 1048576)} MB`);
+  const kb = (n) => (n === null || n === undefined
+    ? "—"
+    : n < 1024
+      ? `${Math.round(n)} B`
+      : n < 1048576
+        ? `${Math.round(n / 1024)} KB`
+        : `${Math.round(n / 1048576)} MB`);
   const short = (v) => (v ? String(v).slice(0, 8) : "—");
 
   /* 中文名表：标签 → 中文。没有就回落到标签本身。 */
@@ -392,21 +414,68 @@
   const files = (I === null ? [] : I.files) || [];
   const tray = document.createElement("div");
   tray.className = "tray";
-  const fileRows = files.map((f, i) => {
-    const all = f.direct.concat(f.derived);
-    const sheets = [...new Set(f.direct.map((r) => r.sheet).filter((s) => s !== null))];
-    const meta = `${sheets.length} 个 sheet · ${all.length} 张表 · ${kb(f.bytes)}`;
-    return `<button class="row" data-f="${i}">
-      <span class="t"><span class="n" title="${esc(f.name)}">${esc(f.name)}</span><span class="m">${meta}</span></span>
-    </button>`;
-  }).join("");
+  /* 托盘分两类来源：已在批次里的（画布上有它）、只在 ground-truth 里的（待物化）。 */
+  const batchFiles = () => (I === null ? [] : I.files) || [];
+  const groundFiles = () => {
+    const state = ground();
+    return state === null ? [] : state.files || [];
+  };
+  /* 批次里有、ground-truth 里已经没有的文件：页面据此把整条链路标灰，不靠会话状态。 */
+  const staleFiles = () => {
+    if (!LIVE) return new Set();
+    const alive = new Set(groundFiles().filter((f) => !f.missing).map((f) => f.name));
+    return new Set(batchFiles().filter((f) => f.inBatch && !alive.has(f.name)).map((f) => f.name));
+  };
+  const trayRows = () => {
+    const stale = staleFiles();
+    const inBatch = new Set(batchFiles().map((f) => f.name));
+    const rows = [];
+    batchFiles().forEach((f, i) => {
+      const all = f.direct.concat(f.derived);
+      const sheets = [...new Set(f.direct.map((r) => r.sheet).filter((s) => s !== null))];
+      const meta = stale.has(f.name)
+        ? "已移出输入 · 重建批次前不可用"
+        : `${sheets.length} 个 sheet · ${all.length} 张表 · ${kb(f.bytes)}`;
+      rows.push(`<div class="row${stale.has(f.name) ? " stale" : ""}" data-f="${i}">
+        <span class="t"><span class="n" title="${esc(f.name)}">${esc(f.name)}</span><span class="m">${esc(meta)}</span></span>
+        ${LIVE ? `<span class="del" data-del="${esc(f.name)}" title="移出这个文件">×</span>` : ""}
+      </div>`);
+    });
+    if (LIVE) {
+      for (const f of groundFiles()) {
+        if (inBatch.has(f.name)) continue;
+        rows.push(`<div class="row local" data-p="${esc(f.name)}">
+          <span class="t"><span class="n" title="${esc(f.name)}">${esc(f.name)}</span><span class="m">${kb(f.bytes)} · 待物化</span></span>
+          <span class="del" data-del="${esc(f.name)}" title="移出这个文件">×</span>
+        </div>`);
+      }
+    }
+    return rows.join("");
+  };
+  const paintTray = () => {
+    const list = tray.querySelector(".list");
+    if (list === null) return;
+    list.innerHTML = trayRows();
+    const total = new Set([...batchFiles().map((f) => f.name), ...groundFiles().map((f) => f.name)]);
+    const count = tray.querySelector(".cnt");
+    if (count !== null) count.textContent = `${total.size} 个文件`;
+    const undo = tray.querySelector('[data-act="undo"]');
+    if (undo !== null) {
+      const state = ground();
+      const ready = LIVE && state !== null && state.canUndo === true;
+      undo.disabled = !ready;
+      undo.title = ready ? `撤回：把 ${state.undoFile ?? "上一个文件"} 放回输入` : "没有可撤回的移出";
+    }
+  };
   tray.innerHTML = `
-    <div class="hd"><b>来源</b><span>${files.length} 个文件</span>
-      <button class="imp" title="导入文件（也可以直接拖进来）"><svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M6 2.5v7M2.5 6h7"/></svg></button>
+    <div class="hd"><b>来源</b><span class="cnt"></span>
+      <button class="imp" title="${LIVE ? "导入文件（也可以直接拖进来）" : "需要从 start.ps1 启动服务才能导入"}"><svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M6 2.5v7M2.5 6h7"/></svg></button>
       <button class="fold" title="收起"><svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M7.5 2.5 4 6l3.5 3.5"/></svg></button>
     </div>
-    <div class="list">${fileRows}</div>
+    <div class="list"></div>
+    ${LIVE ? '<div class="tray-ft"><button class="tbtn" data-act="undo">撤回</button><button class="tbtn" data-act="rebuild">重建输入批次</button></div>' : ""}
     <input class="pick" type="file" multiple hidden>`;
+  if (!LIVE) tray.querySelector(".imp").classList.add("off");
 
   /* ---------- 底栏 ---------- */
   const bar = document.createElement("div");
@@ -517,6 +586,15 @@
     const selected = selNode.id === null ? null : N.find((n) => n.id === selNode.id) ?? null;
     const path = stations().map((s, i) => `${i === 0 ? "" : '<span class="sep">→</span>'}<button>${esc(s.label)}</button>`).join("");
     const meta = G === null ? "没有运行记录" : `运行 ${esc(G.runShort)} · ${G.identical === true ? "一致" : G.identical === false ? "有变化" : "—"} · ${dur(G.elapsedMs)}`;
+    const chain = staleChain();
+    const gone = selected === null
+      ? false
+      : selected.kind === "table"
+        ? chain.tables.has(selected.label)
+        : selected.kind === "compute"
+          ? incidentTables(selected.id).some((t) => chain.tables.has(t))
+          : false;
+    const goneNote = gone ? '<div class="bp-note">来源已移出输入，重建批次前不可用</div>' : "";
     bar.innerHTML = `
       <div class="bp-hd">
         <button class="btab">本次运行</button>
@@ -524,7 +602,7 @@
         <div class="bp-path">${path}</div>
         <span class="bp-meta">${esc(meta)}</span>
       <button class="bp-fold" title="收起/展开"><svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 7.5 6 4l3.5 3.5"/></svg></button></div>
-      <div class="bp-bd">${selected !== null && selected.kind !== "file" ? nodePane(selected) : f === undefined ? '<div class="pane grow"><div class="note">点画布上的任意一个节点，或者左边的文件</div></div>' : filePane(f)}</div>
+      ${goneNote}<div class="bp-bd">${selected !== null && selected.kind !== "file" ? nodePane(selected) : f === undefined ? '<div class="pane grow"><div class="note">点画布上的任意一个节点，或者左边的文件</div></div>' : filePane(f)}</div>
       <div class="bp-ft"><span class="bp-hint">对话在右边</span><button class="btn off" disabled>复制</button></div>`;
   }
 
@@ -727,22 +805,64 @@ if (location.search.includes("selftest")) {
 }
 
 
-  /* ---------- 导入：按钮选文件，或者直接拖进托盘 ---------- */
-  const list = tray.querySelector(".list");
-  const addLocal = (fileList) => {
+  /* ---------- 与服务的接口 ---------- */
+  const postJson = async (url, payload) => {
+    const response = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    const data = await response.json().catch(() => ({ ok: false, error: "服务没有返回 JSON" }));
+    if (data.ok !== true) throw new Error(data.error || `请求失败（${response.status}）`);
+    return data;
+  };
+  const applyState = (state) => {
+    if (state === undefined || state === null) return;
+    RT.inputs = state;
+    paintTray();
+    paintStale();
+  };
+  const note = (text, tone) => {
+    const el = document.getElementById("toast");
+    if (el === null) return;
+    el.textContent = text;
+    el.className = tone === "bad" ? "toast bad on" : "toast on";
+    clearTimeout(note.timer);
+    note.timer = setTimeout(() => { el.className = "toast"; }, 4200);
+  };
+
+  /* ---------- 导入：上传落进 ground-truth，再由 setup 收进批次 ---------- */
+  const upload = async (fileList) => {
     for (const file of fileList) {
-      const row = document.createElement("div");
-      row.className = "row local";
-      row.innerHTML = `<span class="t"><span class="n" title="${esc(file.name)}">${esc(file.name)}</span><span class="m">${kb(file.size)} · 待物化</span></span>`;
-      list.appendChild(row);
+      if (!/\.(xlsx|xls)$/i.test(file.name)) {
+        note(`只接受 .xlsx / .xls：${file.name}`, "bad");
+        continue;
+      }
+      try {
+        const response = await fetch("/api/inputs/upload", {
+          method: "POST",
+          headers: { "Content-Type": "application/octet-stream", "X-Filename": encodeURIComponent(file.name) },
+          body: await file.arrayBuffer(),
+        });
+        const data = await response.json();
+        if (data.ok !== true) throw new Error(data.error || "上传失败");
+        applyState(data.state);
+        note(`已导入 ${file.name}`);
+      } catch (error) {
+        note(`导入失败：${error.message}`, "bad");
+      }
     }
   };
   tray.querySelector(".pick").addEventListener("change", (e) => {
-    addLocal(e.target.files);
+    if (LIVE) upload(e.target.files);
     e.target.value = "";
   });
-  tray.querySelector(".imp").addEventListener("click", () => tray.querySelector(".pick").click());
+  tray.querySelector(".imp").addEventListener("click", () => {
+    if (!LIVE) { note("导入需要从 start.ps1 启动服务", "bad"); return; }
+    tray.querySelector(".pick").click();
+  });
   tray.addEventListener("dragover", (e) => {
+    if (!LIVE) return;
     e.preventDefault();
     tray.classList.add("drop");
   });
@@ -750,8 +870,148 @@ if (location.search.includes("selftest")) {
   tray.addEventListener("drop", (e) => {
     e.preventDefault();
     tray.classList.remove("drop");
-    if (e.dataTransfer !== null) addLocal(e.dataTransfer.files);
+    if (LIVE && e.dataTransfer !== null) upload(e.dataTransfer.files);
   });
+
+  /* ---------- 移出：贴行确认，绝不替用户按下去 ---------- */
+  let asking = null;
+  const closeAsk = () => {
+    if (asking !== null) { asking.remove(); asking = null; }
+  };
+  const askRemove = (anchor, name) => {
+    closeAsk();
+    if (!LIVE) { note("移出需要从 start.ps1 启动服务", "bad"); return; }
+    const file = batchFiles().find((f) => f.name === name) ?? null;
+    const tables = file === null ? [] : file.direct.concat(file.derived);
+    const box = document.createElement("div");
+    box.className = "ask";
+    box.innerHTML = `
+      <div class="ask-h">移出输入</div>
+      <div class="ask-b">${esc(name)}</div>
+      ${file === null ? "" : `<div class="ask-n">它物化出 ${tables.length} 张表；移出后这些链路会标记为不可用，下次重建批次才生效。</div>`}
+      <textarea class="ask-r" rows="2" placeholder="为什么移出（可留空）"></textarea>
+      <div class="ask-f"><button class="tbtn" data-ask="cancel">取消</button><button class="tbtn go" data-ask="ok">移出</button></div>
+      <div class="ask-e"></div>`;
+    document.body.appendChild(box);
+    const r = anchor.getBoundingClientRect();
+    const size = box.getBoundingClientRect();
+    let left = r.right + 10;
+    if (left + size.width > window.innerWidth - 12) left = Math.max(12, r.left - size.width - 10);
+    const top = Math.min(Math.max(12, r.top - 6), Math.max(12, window.innerHeight - size.height - 12));
+    box.style.left = `${left}px`;
+    box.style.top = `${top}px`;
+    box.querySelector(".ask-r").focus();
+    asking = box;
+    box.querySelector('[data-ask="cancel"]').addEventListener("click", closeAsk);
+    box.querySelector('[data-ask="ok"]').addEventListener("click", async (event) => {
+      const button = event.currentTarget;
+      button.disabled = true;
+      box.querySelector(".ask-e").textContent = "";
+      try {
+        const data = await postJson("/api/inputs/delete", {
+          name,
+          reason: box.querySelector(".ask-r").value,
+          tables: tables.map((r2) => ({ name: r2.name, sheet: r2.sheet })),
+        });
+        closeAsk();
+        applyState(data.state);
+        note(`已移出 ${name}`);
+        if (typeof window.__PUSH_EVENT === "function") {
+          window.__PUSH_EVENT(`已移出 ${name}${data.event && data.event.reason ? ` · ${data.event.reason}` : ""}`);
+        }
+      } catch (error) {
+        box.querySelector(".ask-e").textContent = error.message;
+        button.disabled = false;
+      }
+    });
+  };
+  window.addEventListener("pointerdown", (e) => {
+    if (asking !== null && !asking.contains(e.target) && !e.target.closest("[data-del]")) closeAsk();
+  }, true);
+  window.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") closeAsk();
+  });
+
+  /* ---------- 撤回 / 重建批次 ---------- */
+  tray.addEventListener("click", async (e) => {
+    const del = e.target.closest("[data-del]");
+    if (del !== null) {
+      e.stopPropagation();
+      askRemove(del.closest(".row"), del.getAttribute("data-del"));
+      return;
+    }
+    const action = e.target.closest("[data-act]");
+    if (action === null) return;
+    const kind = action.getAttribute("data-act");
+    if (action.disabled) return;
+    try {
+      if (kind === "undo") {
+        const data = await postJson("/api/inputs/undo", {});
+        applyState(data.state);
+        note(`已撤回：${data.event.file} 放回输入`);
+      } else if (kind === "rebuild") {
+        action.disabled = true;
+        note("正在重建输入批次……");
+        const data = await postJson("/api/inputs/rebuild", {});
+        applyState(data.state);
+        note(data.ok ? "输入批次已重建，需要重新运行" : "重建失败，看终端输出");
+        action.disabled = false;
+      }
+    } catch (error) {
+      note(`操作失败：${error.message}`, "bad");
+      action.disabled = false;
+    }
+  });
+
+  /* 被移出的文件带出整条链：表沿着「谁读它 → 谁写它」一路传染，
+     机器只要碰到其中一张就跟它一起变灰。 */
+  const incidentTables = (id) => {
+    const out = [];
+    for (const e of E) {
+      const other = e.from === id ? e.to : e.to === id ? e.from : null;
+      if (other === null) continue;
+      const n = byId.get(other);
+      if (n !== undefined && n.kind === "table") out.push(n.label);
+    }
+    return out;
+  };
+  const staleChain = () => {
+    const touched = staleFiles();
+    const tables = new Set();
+    const fns = new Set();
+    if (touched.size > 0) {
+      for (const f of batchFiles()) {
+        if (!touched.has(f.name)) continue;
+        for (const r of f.direct.concat(f.derived)) tables.add(r.name);
+      }
+      if (G !== null) {
+        let growing = true;
+        while (growing) {
+          growing = false;
+          for (const n of G.nodes) {
+            if (fns.has(n.fn) || !n.reads.some((t) => tables.has(t))) continue;
+            fns.add(n.fn);
+            for (const t of n.writes) tables.add(t);
+            growing = true;
+          }
+        }
+      }
+    }
+    return { files: touched, tables, fns };
+  };
+  const paintStale = () => {
+    const { files, tables, fns } = staleChain();
+    for (const el of layer.querySelectorAll("[data-i]")) {
+      const node = N[Number(el.getAttribute("data-i"))];
+      if (node === undefined) continue;
+      let hit = false;
+      if (node.kind === "table") hit = tables.has(node.label);
+      else if (node.kind === "sheet") hit = node.out !== null && node.out !== undefined && tables.has(node.out.label);
+      else if (node.kind === "compute") hit = fns.size > 0 && incidentTables(node.id).some((t) => tables.has(t));
+      else if (node.kind === "file") hit = files.has(String(node.id).replace(/^f:/, ""));
+      el.classList.toggle("stale", hit);
+    }
+  };
 
   root.addEventListener("click", (e) => {
     if (e.target.closest('[data-act="theme"]') !== null) {
@@ -761,6 +1021,13 @@ if (location.search.includes("selftest")) {
     const row = e.target.closest("[data-f]");
     if (row !== null) {
       select(Number(row.getAttribute("data-f")), true);
+      return;
+    }
+    const pending = e.target.closest("[data-p]");
+    if (pending !== null) {
+      const name = pending.getAttribute("data-p");
+      select(batchFiles().findIndex((f) => f.name === name), true);
+      note(`${name} 还在 ground-truth 里，重建批次后才会出现在画布上`);
       return;
     }
     const z = e.target.closest("[data-z]");
@@ -778,6 +1045,8 @@ if (location.search.includes("selftest")) {
     view.y = q.get("y") === null ? 0 : Number(q.get("y"));
     apply();
   }
+  paintTray();
+  paintStale();
   const start = files.findIndex((f) => f.inBatch);
   select(start < 0 ? 0 : start, q.get("focus") === "1");
   window.addEventListener("resize", fit);

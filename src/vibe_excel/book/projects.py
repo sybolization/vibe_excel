@@ -49,6 +49,16 @@ def collect_projects(store: str | Path) -> list[ProjectSummary]:
         raise VibeError(f"找不到 control.db：{path}")
     try:
         with readonly_database(path) as db:
+            # 旧 store 没有归档表。把「表不存在」当成「没有归档」，
+            # 而不是让整个索引页报 no such table。
+            archived: set[str] = set()
+            if db.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='archived_projects'"
+            ).fetchone() is not None:
+                archived = {
+                    as_text(row["program_id"]) or ""
+                    for row in db.execute("SELECT program_id FROM archived_projects")
+                }
             programs = _rows(db, "SELECT id, name, created_at FROM programs")
             sessions = _rows(
                 db,
@@ -104,6 +114,8 @@ def collect_projects(store: str | Path) -> list[ProjectSummary]:
     summaries: list[ProjectSummary] = []
     for row in programs:
         identifier = as_text(row.get("id")) or ""
+        if identifier in archived:
+            continue
         owned = sessions_by_program.get(identifier, [])
         # 优先进活动会话；没有活动会话就退到最近更新的那个，总比点不进去强。
         active = next((item for item in owned if item["status"] == "active"), owned[0] if owned else None)

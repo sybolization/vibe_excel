@@ -357,3 +357,54 @@ button{font:inherit;color:inherit;background:none;border:0;cursor:pointer}
 /* 站点模式：顶栏的返回入口。单页模式下不渲染。 */
 .brand a.home{align-self:center;display:flex;align-items:center;justify-content:center;width:20px;height:20px;margin-right:-3px;border-radius:6px;color:var(--ink2);font-size:12px;line-height:1;text-decoration:none}
 .brand a.home:hover{background:var(--fill);color:var(--ink)}
+
+/* ---------- 服务模式：导入、移出、撤回 ---------- */
+/* 托盘底部的两个动词只在服务模式出现；静态页面上根本没有这两个按钮 */
+.tray-ft{display:flex;gap:6px;padding:7px 3px 1px;margin-top:5px;border-top:1px solid var(--line)}
+.tbt{flex:1;height:26px;border-radius:8px;font:11.5px/1 var(--font);color:var(--ink2);background:var(--fill)}
+.tbt:hover{background:var(--hover);color:var(--ink)}
+.tbt:disabled{opacity:.42;cursor:default}
+.tbt.go{background:var(--accent-soft);color:var(--accent)}
+.tray .hd .imp.off{opacity:.4;cursor:default}
+
+/* 删除入口只在悬停时出现：常驻一个小叉，托盘会很吵 */
+.tray .row .del{position:absolute;right:5px;top:15px;width:20px;height:20px;display:grid;place-items:center;
+  border-radius:6px;color:var(--muted);font-size:14px;line-height:1;opacity:0;transition:opacity .12s}
+.tray .row:hover .del{opacity:1}
+.tray .row .del:hover{background:var(--hover);color:var(--ink)}
+
+/* 已从输入里移出的文件：名字划掉，说明为什么不能用了 */
+.tray .row.stale .n{color:var(--faint);text-decoration:line-through;text-decoration-thickness:1px}
+
+/* 画布上受牵连的链路：退到背景里，但仍然可读、可点 */
+.cvv [data-i].stale{opacity:.34;filter:saturate(.4)}
+
+/* 二次确认：贴着被点的那一行弹出，不铺满屏幕 */
+.ask{position:fixed;z-index:70;width:274px;padding:12px 13px 11px;border-radius:14px;
+  background:var(--panel);border:1px solid var(--line2);box-shadow:var(--shadow);font:12px/1.5 var(--font)}
+.ask-h{font-weight:600;color:var(--ink);font-size:12.5px}
+.ask-b{margin:3px 0 7px;color:var(--ink);word-break:break-all}
+.ask-n{color:var(--muted);font-size:11.5px;margin-bottom:9px}
+.ask-r{width:100%;box-sizing:border-box;resize:vertical;border:1px solid var(--line2);border-radius:8px;
+  padding:6px 8px;background:var(--fill);color:var(--ink);font:12px/1.5 var(--font);min-height:44px}
+.ask-r:focus{outline:none;border-color:var(--accent)}
+.ask-f{display:flex;gap:6px;justify-content:flex-end;margin-top:9px}
+.ask-e{color:var(--amber);font-size:11.5px;margin-top:6px}
+.ask-e:empty{display:none}
+
+/* 底栏：选中了灰链路时的一句话 */
+.bp-note{flex:none;padding:7px 14px;font:11.5px/1.4 var(--font);color:var(--amber);
+  border-bottom:1px solid var(--line2);background:var(--sunken)}
+
+/* 操作结果提示 */
+.toast{position:fixed;z-index:80;left:50%;bottom:22px;transform:translate(-50%,10px);opacity:0;
+  pointer-events:none;padding:8px 15px;border-radius:10px;background:var(--ink);color:var(--panel);
+  font:12px/1.4 var(--font);box-shadow:var(--shadow);transition:opacity .16s,transform .16s;max-width:70vw}
+.toast.on{opacity:1;transform:translate(-50%,0)}
+.toast.bad{background:var(--amber);color:#fff}
+
+/* 对话里的系统行：输入变更这类事件，不冒充 agent 说的话 */
+.blk.ev{display:flex;align-items:flex-start;gap:8px;font:11.5px/1.5 var(--font);color:var(--ink2);
+  padding:6px 10px;border-radius:9px;background:var(--fill);border:1px dashed var(--line2)}
+.blk.ev .evd{width:5px;height:5px;border-radius:50%;background:var(--amber);flex:none;margin-top:6px}
+.blk.ev .evt{min-width:0;word-break:break-word}

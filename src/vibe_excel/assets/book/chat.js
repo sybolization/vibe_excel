@@ -183,6 +183,8 @@
           last = at;
         }
         if (b.kind === "tool") return stamp + toolBlock(b);
+        /* 输入变更这类系统事件：不冒充 agent 说的话，单独一种行。 */
+        if (b.kind === "event") return stamp + `<div class="blk ev"><span class="evd"></span><span class="evt">${esc(b.text)}</span></div>`;
         if (b.kind === "user") return `${stamp}<div class="blk u"><div class="who">你</div><div class="body">${esc(b.text).replace(/\n/g, "<br>")}</div></div>`;
         return `${stamp}<div class="blk a"><div class="who">agent</div><div class="body md">${renderMd(b.text)}</div></div>`;
       })
@@ -307,6 +309,20 @@
       paintRail();
     }
   }
+
+  /* 页面上的动作（例如移出输入）要能在对话里留下一条系统行 */
+  window.__PUSH_EVENT = (text) => {
+    if (typeof text !== "string" || text === "") return;
+    if (state.draft === null) {
+      state.draft = { id: "draft", title: "输入变更", start: "", end: "", blocks: [] };
+    }
+    state.draft.blocks.push({ kind: "event", at: new Date().toISOString(), text });
+    paint();
+    if (!state.open) {
+      state.unread = true;
+      paintRail();
+    }
+  };
 
   /* 引用选中的节点 */
   let quoted = null;

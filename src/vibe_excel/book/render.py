@@ -53,7 +53,11 @@ def inline(source: str) -> str:
 
 
 def render_book(
-    view: BookView, *, fonts: str | None = None, home: str | None = None
+    view: BookView,
+    *,
+    fonts: str | None = None,
+    home: str | None = None,
+    runtime: dict[str, object] | None = None,
 ) -> str:
     """把 book 视图模型渲染成 HTML。
 
@@ -61,13 +65,20 @@ def render_book(
     保证可选页面缺失时仍能浏览其余内容。
 
     fonts：字体相对当前页面的路径前缀（站点模式给 ""，单页模式给 None 表示不注入）；
-    home：上一级（项目索引页）的相对地址，给了才在顶栏出现返回入口。
+    home：上一级（项目索引页）的相对地址，给了才在顶栏出现返回入口；
+    runtime：页面的运行态（服务托管时是 live，静态导出时是 static）。前端据此决定
+    导入/删除能不能点——能力缺失要看得见，不能让人以为点下去会生效。
     """
     css, js = _asset("app.css"), _asset("app.js")
     font_css = "" if fonts is None else font_face_css(fonts) + "\n"
     marked, chat = _asset("vendor/marked.min.js"), _asset("chat.js")
     # 内联 JSON 中的 < 与行分隔符必须转义，否则 </script> 会提前闭合脚本标签。
     payload = escape_for_script(json_text(view))
+    # 操作结果的一句话提示：放在 body 里由 app.js 控制显隐，静态导出时永不出现。
+    toast = '<div id="toast" class="toast"></div>'
+    runtime_payload = escape_for_script(
+        json_text(runtime if runtime is not None else {"mode": "static", "editable": False})
+    )
     program = view["program"]["name"] if view["program"] is not None else "book"
     warnings = list(view.get("warnings", []))
     if view["graph"] is not None:
@@ -102,6 +113,7 @@ def render_book(
 <body{body_attrs}>
 <div id="root"></div>
 {diagnostics}<script type="application/json" id="book-data">{payload}</script>
+{toast}<script type="application/json" id="book-runtime">{runtime_payload}</script>
 <script>
 {inline(marked)}
 </script>

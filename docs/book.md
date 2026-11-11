@@ -69,6 +69,54 @@ python -m vibe_excel.book build --store C:\data\a --store C:\data\b --out .\site
 - 页面文件名仍取项目 id 前 8 位；万一同名冲突会加序号，不会互相覆盖。
 - 单页模式（`--out x.html`）只接一个 store：它只渲染一个项目，多了没意义。
 
+## 服务模式：为什么需要它
+
+`book build` 出来的是一份静态 HTML，双击就能看——但它写不了磁盘。
+「导入文件」「移出输入」「重建批次」都要动 ground-truth 目录、清单名单和 store 里的归档，
+所以这些能力只在服务模式下开：
+
+```powershell
+python -m vibe_excel.book serve --store <store> --port 8731 --open
+```
+
+- 页面**现场采集**：每次刷新重新读 `control.db` 和运行目录，导入/删除后马上能看到结果
+- 只绑 `127.0.0.1`，不开局域网
+- 静态导出仍然保留，只是导入/删除按钮会置灰、并在悬停提示里说明原因——
+  能力缺失要看得见，这比让它消失更不容易误判
+
+运行态由 `render_book(..., runtime=...)` 写进页面里的
+`<script type="application/json" id="book-runtime">`，前端据此决定开不开这些功能。
+
+## 构建期输入：导入 / 移出 / 撤回
+
+侧边栏管的是「构建 flow 用的输入」（ground-truth）。
+发布后喂给 flow 的运行数据是另一套界面，不在这里。
+
+**导入**：文件写进清单 `sessions.inputs.dir` 指向的目录，同时把文件名登记进 `inputs.files`。
+`setup` 只认这份名单，不登记等于没导入。清单只做「files 那几行」的定点改写，
+注释、顺序、别的插件原样保留。
+
+**移出**：不是真删。
+
+```
+<store>/.trash/<时间戳>/       ← 撤回窗口期
+    orders.xlsx
+    packet.json                ← 元信息 + 表清单 + 受影响链路 + 移出理由
+<store>/.archive/<时间戳>/     ← 重建批次成功后转正，长期保留
+<store>/input-events.jsonl     ← 追加式事件流水
+```
+
+"包"（`packet.json`）是给 agent 准备的：将来接上对话通道，它只要读这个包，
+就知道「哪个文件被拿掉了、为什么、牵动了哪些表」，再决定脚本怎么改。
+原始文件一直在归档里，随时能读回全文。
+
+**撤回**：只撤最近一次未被撤回的移出（`undo`），文件和名单同时恢复。
+
+**页面上的灰**：判定不靠"记住了哪些操作"，而是对比当前批次和 ground-truth——
+批次里有、ground-truth 里已经没有的文件，它带出的整条链（文件 → sheet → 表 → 机器 → 产物）
+一起变灰。刷新、换机器都成立。灰掉的节点仍然可以点开看历史，只是底栏会说
+「来源已移出输入，重建批次前不可用」。
+
 ## 代码在哪
 
 | 文件 | 职责 |
@@ -76,7 +124,9 @@ python -m vibe_excel.book build --store C:\data\a --store C:\data\b --out .\site
 | `book/projects.py` | `collect_projects`：只读 `control.db`，出 `ProjectSummary` 列表 |
 | `book/index_render.py` | `render_index`：复用 `app.css` 渲染索引页 |
 | `book/render.py` | `render_book(view, fonts=, home=)`；`font_face_css` |
-| `book/cli.py` | 单页 / 站点两种模式，字体复制 |
+| `book/cli.py` | 单页 / 站点 / 服务三种模式 |
+| `book/serve.py` | 本地服务：页面现场采集 + 输入编辑接口 |
+| `book/inputs_edit.py` | ground-truth 加/删/撤回、归档与事件 |
 | `book/collect.py` | `collect_book(program_id=)`：站点模式按项目选会话 |
 
 索引页没有自己的样式表：它内联 `app.css`，索引专属布局写在页面里的一小段 `<style>`。

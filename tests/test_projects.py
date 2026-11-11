@@ -190,6 +190,17 @@ def test_render_book_with_fonts_points_at_the_sidecar_files() -> None:
     assert "data-font-notice" not in html
 
 
+def test_render_book_carries_the_runtime_state() -> None:
+    static = render_book(_book_view())
+    # 静态导出没有后台：页面据此把导入/删除置灰
+    assert '"mode":"static"' in static
+    assert '"editable":false' in static
+
+    live = render_book(_book_view(), runtime={"mode": "live", "editable": True})
+    assert '"mode":"live"' in live
+    assert '"editable":true' in live
+
+
 def test_render_book_single_file_mode_has_no_fonts_or_back_link() -> None:
     html = render_book(_book_view())
 

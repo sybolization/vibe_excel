@@ -6,6 +6,7 @@
     默认：把 store 渲染成站点并打开索引页。
     -Full   从零跑一轮：setup → run → publish，然后出站点（只接一个 store）。
     -Status 打印每个 store 的当前状态，不生成任何文件。
+    -Build  只导出静态站点（发给别人看），不起服务。
     -Test   跑测试。
 
     不给 -Store 时，脚本会在 -Root 下按候选名找 store（见下方 $candidates），
@@ -29,6 +30,9 @@ param(
     [string]$Inputs,
     [string]$Out,
     [string]$AsOf = "2026-11-11",
+    [int]$Port = 8731,
+    # 只导出静态站点（发给别人看），不起服务
+    [switch]$Build,
     [switch]$Full,
     [switch]$Status,
     [switch]$Test,
@@ -113,19 +117,30 @@ if ($Full) {
     }
 }
 
-Write-Step "生成站点"
 $storeArgs = @()
 foreach ($item in $Store) { $storeArgs += @("--store", $item) }
-& $python -m vibe_excel.book build @storeArgs --out $Out
-if ($LASTEXITCODE -ne 0) {
-    Fail "站点生成失败（退出码 $LASTEXITCODE）"
+
+if ($Build) {
+    Write-Step "导出静态站点"
+    & $python -m vibe_excel.book build @storeArgs --out $Out
+    if ($LASTEXITCODE -ne 0) {
+        Fail "站点生成失败（退出码 $LASTEXITCODE）"
+    }
+    $index = Join-Path $Out "index.html"
+    if (-not (Test-Path $index)) {
+        Fail "生成完了却没有 index.html：$index"
+    }
+    if (-not $NoOpen) {
+        Start-Process $index
+        Write-Note "已在浏览器打开 $index"
+    }
+    exit 0
 }
 
-$index = Join-Path $Out "index.html"
-if (-not (Test-Path $index)) {
-    Fail "生成完了却没有 index.html：$index"
-}
-if (-not $NoOpen) {
-    Start-Process $index
-    Write-Note "已在浏览器打开 $index"
-}
+# 默认起服务：页面现场采集，导入/删除/撤回才有后台可用
+Write-Step "启动服务"
+Write-Note "http://127.0.0.1:$Port/    （Ctrl+C 停止）"
+$serveArgs = @("-m", "vibe_excel.book", "serve") + $storeArgs + @("--port", "$Port")
+if ($NoOpen) { $serveArgs += "--no-open" }
+& $python @serveArgs
+exit $LASTEXITCODE
