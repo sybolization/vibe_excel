@@ -9,22 +9,13 @@ from __future__ import annotations
 from datetime import datetime
 from html import escape
 
+from ..util import escape_for_script, json_text
 from .projects import page_name
-from .render import _asset, font_face_css
+from .projects_edit import MAX_PROJECT_NAME
+from .render import THEME_ICONS, THEME_SCRIPT, _asset, font_face_css
 from .types import ProjectSummary
 
 __all__ = ["render_index", "renderIndex"]
-
-_ICONS = (
-    '<svg class="i-moon" viewBox="0 0 16 16" width="15" height="15" fill="none" '
-    'stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round">'
-    '<path d="M13.4 9.8A5.7 5.7 0 0 1 6.2 2.6a5.7 5.7 0 1 0 7.2 7.2z"/></svg>'
-    '<svg class="i-sun" viewBox="0 0 16 16" width="15" height="15" fill="none" '
-    'stroke="currentColor" stroke-width="1.4" stroke-linecap="round">'
-    '<circle cx="8" cy="8" r="3"/>'
-    '<path d="M8 1.5v1.6M8 12.9v1.6M1.5 8h1.6M12.9 8h1.6M3.4 3.4l1.1 1.1'
-    'M11.5 11.5l1.1 1.1M12.6 3.4l-1.1 1.1M4.5 11.5l-1.1 1.1"/></svg>'
-)
 
 _INDEX_STYLE = """
 /* 索引页专属：一列项目卡片。其余全部沿用 app.css 的 token 与组件。 */
@@ -72,23 +63,21 @@ body.ix .fbar{right:12px}
 .ask .tbtn.go{background:var(--accent);color:var(--on-accent)}
 .ask .tbtn.go:hover{background:var(--accent-fill)}
 .ask .tbtn:disabled{opacity:.55;cursor:default}
-"""
-
-_THEME_SCRIPT = """
-(() => {
-  /* 与账页同一套规则、同一个存储键：在索引页选的主题，进项目页照样是它。 */
-  const KEY = "vibe-book-theme";
-  const read = () => { try { return localStorage.getItem(KEY); } catch { return null; } };
-  const store = (value) => { try { localStorage.setItem(KEY, value); } catch { /* 存不下不影响本次 */ } };
-  const apply = (value) => { document.documentElement.dataset.theme = value === "dark" ? "dark" : "light"; };
-  const prefers = window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches;
-  apply(new URLSearchParams(location.search).get("t") ?? read() ?? (prefers ? "dark" : "light"));
-  document.querySelector(".iconbtn").addEventListener("click", () => {
-    const next = document.documentElement.dataset.theme === "dark" ? "light" : "dark";
-    apply(next);
-    store(next);
-  });
-})();
+/* 新建项目：顶栏的主操作。尺寸沿用 .btn，颜色用强调色，跟页面里别的动作分得开。 */
+.ix-new{height:28px;padding:0 12px;border-radius:8px;font:500 12.5px var(--font);
+  background:var(--accent);color:var(--on-accent);white-space:nowrap}
+.ix-new:hover{background:var(--accent-fill)}
+.ix-new:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+/* 新建弹层：与归档确认同一套 .ask 材质，但居中并带遮罩——它是一段完整的输入流程。 */
+.ix-scrim{position:fixed;inset:0;z-index:69;background:rgba(24,24,28,.34)}
+.ix-newdlg{width:340px;left:50%;top:50%;transform:translate(-50%,-50%)}
+.ix-newdlg .ix-l{display:block;margin-top:9px;color:var(--ink2);font-size:11.5px}
+.ix-newdlg input,.ix-newdlg select{display:block;width:100%;height:30px;margin-top:4px;padding:0 8px;
+  border:1px solid var(--line);border-radius:8px;background:var(--fill);color:var(--ink);
+  font:12.5px/1.4 var(--font)}
+.ix-newdlg input:focus,.ix-newdlg select:focus{outline:none;border-color:var(--accent);
+  background:var(--panel)}
+.ix-newdlg .ask-f{margin-top:12px}
 """
 
 
@@ -236,6 +225,100 @@ _ARCHIVE_SCRIPT = """
 """
 
 
+_CREATE_SCRIPT = """
+(() => {
+  /* 新建项目：交互留在页内，不跳页，也不用浏览器 prompt。
+     弹层本身由服务端渲染（只有一个 store 时连选择器都没有），这里只管开合、校验与提交。
+     只在服务托管的索引页注入；build 出来的静态站点没有接口可调，按钮本身就不渲染。 */
+  const STORES = __STORES__;
+  const MAX = __MAX__;
+  const BAD = /[\\/\\\\:*?"<>|]/;
+  const trigger = document.querySelector('[data-act="create"]');
+  const box = document.getElementById("ix-new");
+  if (trigger === null || box === null) return;
+  const scrim = document.getElementById("ix-new-scrim");
+  const input = box.querySelector(".ix-name");
+  const picker = box.querySelector(".ix-store");
+  const errorLine = box.querySelector(".ask-e");
+  const ok = box.querySelector('[data-new="ok"]');
+  const cancel = box.querySelector('[data-new="cancel"]');
+
+  const close = () => {
+    box.hidden = true;
+    if (scrim !== null) scrim.hidden = true;
+  };
+
+  /* 与服务端同一套规则先挡一遍，省掉一次注定被拒的请求；服务端仍是最终裁判。 */
+  const check = (raw) => {
+    const name = raw.trim();
+    if (name === "") return "项目名不能为空";
+    const bad = name.match(BAD);
+    if (bad !== null) return `项目名不能包含 / \\\\ : * ? " < > | 这些字符（发现「${bad[0]}」）`;
+    if (name === "." || name === "..") return "项目名不能是 . 或 ..";
+    if ([...name].length > MAX) return `项目名最长 ${MAX} 个字符，当前 ${[...name].length} 个`;
+    return "";
+  };
+
+  const submit = async () => {
+    const problem = check(input.value);
+    if (problem !== "") {
+      errorLine.textContent = problem;
+      input.focus();
+      return;
+    }
+    const store = picker === null ? (STORES[0] ?? {}).path : picker.value;
+    ok.disabled = true;
+    errorLine.textContent = "";
+    try {
+      const response = await fetch("/api/projects/create", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: input.value.trim(), store }),
+      });
+      let data;
+      try {
+        data = await response.json();
+      } catch {
+        throw new Error(`接口返回的不是 JSON（HTTP ${response.status}）`);
+      }
+      if (data.ok !== true) throw new Error(data.error || `创建失败（HTTP ${response.status}）`);
+      close();
+      /* 整页刷新最稳：列表、计数和新项目的页面链接都由服务端重新算一遍。 */
+      location.reload();
+    } catch (error) {
+      errorLine.textContent = error instanceof Error ? error.message : String(error);
+      ok.disabled = false;
+    }
+  };
+
+  const open = () => {
+    errorLine.textContent = "";
+    input.value = "";
+    box.hidden = false;
+    if (scrim !== null) scrim.hidden = false;
+    input.focus();
+  };
+
+  trigger.addEventListener("click", open);
+  cancel.addEventListener("click", close);
+  ok.addEventListener("click", submit);
+  input.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") {
+      event.preventDefault();
+      submit();
+    }
+  });
+  if (scrim !== null) scrim.addEventListener("pointerdown", close);
+  window.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") close();
+  });
+
+  /* ?new=1 只给截图与排查用：打开弹层，不替用户创建。 */
+  if (new URLSearchParams(location.search).get("new") === "1") open();
+})();
+"""
+
+
 def _when(stamp: str | None) -> str:
     """把 ISO 时间折成本地时刻。
 
@@ -322,6 +405,8 @@ def render_index(
     title: str = "vibe excel",
     pages: dict[str, str] | None = None,
     can_archive: bool = False,
+    can_create: bool = False,
+    store_choices: list[tuple[str, str]] | None = None,
 ) -> str:
     """把项目列表渲染成索引页。
 
@@ -329,16 +414,24 @@ def render_index(
 
     pages：项目 id → 相对链接。给了就按它连，没给的项目渲染成不可点的行；
     不传时按默认命名连（测试与单项目预览用）。
-    can_archive：由服务托管时传 True，每行才出现「删除」并注入归档脚本。
-    build 出来的静态站点没有接口可调，给一个点了会报错的按钮不诚实。
+    can_archive / can_create：由服务托管时传 True，页面才出现「删除」「新建项目」
+    并注入对应的脚本。build 出来的静态站点没有接口可调，给一个点了会报错的按钮不诚实。
+    store_choices：can_create 时页面要提交的 (store 绝对路径, 显示名)。
+    只有一个 store 时不出选择器，但仍要把路径交给页面，接口才认得出往哪写。
     """
     css = _asset("app.css")
     count = len(projects)
     if count == 0:
-        body = (
-            '    <div class="ix-empty"><b>这个 store 里还没有项目</b>'
-            '先在项目目录里跑一次 <span class="mono">vibectl setup</span>，再回来刷新这一页。</div>'
-        )
+        if can_create:
+            body = (
+                '    <div class="ix-empty"><b>这个 store 里还没有项目</b>'
+                "点右上角的「新建项目」建一个。</div>"
+            )
+        else:
+            body = (
+                '    <div class="ix-empty"><b>这个 store 里还没有项目</b>'
+                '先在项目目录里跑一次 <span class="mono">vibectl setup</span>，再回来刷新这一页。</div>'
+            )
     else:
         body = "\n".join(
             _row(
@@ -352,6 +445,35 @@ def render_index(
     if can_archive:
         note = '<div class="ix-note" id="ix-note" role="status" aria-live="polite"></div>'
     archive_script = f"\n<script>\n{_ARCHIVE_SCRIPT}\n</script>" if can_archive else ""
+    create_button = ""
+    create_ui = ""
+    create_script = ""
+    if can_create:
+        choices = list(store_choices or [])
+        create_button = '<button class="ix-new" type="button" data-act="create">新建项目</button>'
+        picker = ""
+        if len(choices) > 1:
+            options = "".join(
+                f'<option value="{escape(path, quote=True)}">{escape(label)}</option>'
+                for path, label in choices
+            )
+            picker = f'<label class="ix-l">store<select class="ix-store">{options}</select></label>'
+        create_ui = f"""<div class="ix-scrim" id="ix-new-scrim" hidden></div>
+<div class="ask ix-newdlg" id="ix-new" role="dialog" aria-modal="true" aria-labelledby="ix-new-h" hidden>
+  <div class="ask-h" id="ix-new-h">新建项目</div>
+  <label class="ix-l">项目名<input class="ix-name" type="text" maxlength="{MAX_PROJECT_NAME}" autocomplete="off" spellcheck="false"></label>
+  {picker}
+  <div class="ask-e" role="alert"></div>
+  <div class="ask-f"><button class="tbtn" type="button" data-new="cancel">取消</button><button class="tbtn go" type="button" data-new="ok">创建</button></div>
+</div>"""
+        stores_json = escape_for_script(
+            json_text([{"path": path, "label": label} for path, label in choices])
+        )
+        # 先替换数字占位符：store 名来自磁盘，理论上可能包含 __MAX__ 这种字样。
+        script = _CREATE_SCRIPT.replace("__MAX__", str(MAX_PROJECT_NAME)).replace(
+            "__STORES__", stores_json
+        )
+        create_script = f"\n<script>\n{script}\n</script>"
     return f"""<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
@@ -369,15 +491,15 @@ def render_index(
   <div class="brand"><b>{escape(title)}</b><span>项目</span></div>
   <span class="rev">{escape(store_label)}</span>
   <span class="grow"></span>
-  <span class="rev" id="ix-count">{count} 个项目</span>
-  <button class="iconbtn" data-act="theme" title="切换深色 / 浅色" aria-label="切换深色 / 浅色">{_ICONS}</button>
+  {create_button}<span class="rev" id="ix-count">{count} 个项目</span>
+  <button class="iconbtn" data-act="theme" title="切换深色 / 浅色" aria-label="切换深色 / 浅色">{THEME_ICONS}</button>
 </header>
-{note}<main class="ix-list">
+{create_ui}{note}<main class="ix-list">
 {body}
 </main>
 <script>
-{_THEME_SCRIPT}
-</script>{archive_script}
+{THEME_SCRIPT}
+</script>{archive_script}{create_script}
 </body>
 </html>
 """

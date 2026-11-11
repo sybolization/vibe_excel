@@ -18,6 +18,7 @@ from vibe_excel.book import (
     render_index,
     run_cli,
 )
+from vibe_excel.book.render import render_empty_book
 from vibe_excel.session import SessionStore
 from vibe_excel.util import VibeError
 
@@ -229,6 +230,22 @@ def test_render_book_without_warnings_has_no_panel() -> None:
     assert 'id="book-warnings"' not in render_book(_book_view())
 
 
+def test_render_empty_book_says_what_to_do_next() -> None:
+    html = render_empty_book(program="<新项目>", home="index.html", fonts="fonts/")
+
+    # 刚建好的项目没有会话，页面要照实说明它还没跑过、下一步做什么
+    assert "还没有会话" in html
+    assert "这个项目还没跑过" in html
+    assert "vibectl setup" in html
+    # 项目名来自用户输入，必须转义
+    assert "&lt;新项目&gt;" in html
+    assert "<新项目>" not in html
+    assert 'href="index.html"' in html
+    assert '@font-face{font-family:"HarmonyOS Sans SC"' in html
+    # 空项目页不画 canvas，也不假装有运行/输入
+    assert '<div id="root">' not in html
+
+
 def test_build_site_writes_index_project_page_and_fonts(tmp_path: Path) -> None:
     root, program_id, _ = _store_with_runs(tmp_path)
     out = tmp_path / "site"
@@ -299,3 +316,15 @@ def test_build_site_refuses_a_file_where_the_directory_should_be(tmp_path: Path)
     blocker.write_text("not a directory", encoding="utf-8")
 
     assert run_cli(["build", "--store", str(root), "--out", str(blocker)]) == 1
+
+
+def test_build_site_index_has_no_create_entry(tmp_path: Path) -> None:
+    root, _, _ = _store_with_runs(tmp_path)
+    out = tmp_path / "site"
+
+    assert run_cli(["build", "--store", str(root), "--out", str(out)]) == 0
+    html = (out / "index.html").read_text(encoding="utf-8")
+    # 静态站没有后台可写盘：索引页不渲染新建入口，也不带接口地址
+    assert ">新建项目</button>" not in html
+    assert 'data-act="create"' not in html
+    assert "/api/projects/create" not in html

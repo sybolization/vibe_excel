@@ -4,6 +4,8 @@
 视图模型会嵌入 <script> 标签，因此序列化结果必须先转义再拼接。
 """
 
+from __future__ import annotations
+
 import re
 from html import escape
 from pathlib import Path
@@ -45,6 +47,102 @@ def font_face_css(prefix: str = "") -> str:
             f"font-weight:{weight};font-style:normal;font-display:swap}}"
         )
     return "\n".join(faces)
+
+
+# 主题开关的图标与脚本由索引页、空项目页共用：同一个存储键，换页不丢主题。
+# 脚本要求页面里有一个 .iconbtn，两处都按同一个顶栏渲染。
+THEME_ICONS = (
+    '<svg class="i-moon" viewBox="0 0 16 16" width="15" height="15" fill="none" '
+    'stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round">'
+    '<path d="M13.4 9.8A5.7 5.7 0 0 1 6.2 2.6a5.7 5.7 0 1 0 7.2 7.2z"/></svg>'
+    '<svg class="i-sun" viewBox="0 0 16 16" width="15" height="15" fill="none" '
+    'stroke="currentColor" stroke-width="1.4" stroke-linecap="round">'
+    '<circle cx="8" cy="8" r="3"/>'
+    '<path d="M8 1.5v1.6M8 12.9v1.6M1.5 8h1.6M12.9 8h1.6M3.4 3.4l1.1 1.1'
+    'M11.5 11.5l1.1 1.1M12.6 3.4l-1.1 1.1M4.5 11.5l-1.1 1.1"/></svg>'
+)
+
+THEME_SCRIPT = """
+(() => {
+  /* 与账页同一套规则、同一个存储键：在索引页选的主题，进项目页照样是它。 */
+  const KEY = "vibe-book-theme";
+  const read = () => { try { return localStorage.getItem(KEY); } catch { return null; } };
+  const store = (value) => { try { localStorage.setItem(KEY, value); } catch { /* 存不下不影响本次 */ } };
+  const apply = (value) => { document.documentElement.dataset.theme = value === "dark" ? "dark" : "light"; };
+  const prefers = window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches;
+  apply(new URLSearchParams(location.search).get("t") ?? read() ?? (prefers ? "dark" : "light"));
+  document.querySelector(".iconbtn").addEventListener("click", () => {
+    const next = document.documentElement.dataset.theme === "dark" ? "light" : "dark";
+    apply(next);
+    store(next);
+  });
+})();
+"""
+
+# 空项目页：没有画布可画，所以只要一块能读的说明。样式沿用 app.css 的 token。
+_EMPTY_STYLE = """
+body.book-empty{overflow-y:auto}
+body.book-empty .fbar{right:12px}
+.bk-empty{max-width:660px;margin:0 auto;padding:92px 24px 56px}
+.bk-empty h1{margin:14px 0 8px;font:600 21px/30px var(--font);letter-spacing:-.01em;color:var(--ink)}
+.bk-empty p{margin:0 0 10px;color:var(--ink2);font:12.5px/21px var(--font);max-width:58ch}
+.bk-empty p:last-child{margin-bottom:0}
+.bk-empty .mono{color:var(--ink)}
+"""
+
+
+def render_empty_book(
+    *,
+    program: str,
+    home: str | None = None,
+    fonts: str | None = None,
+) -> str:
+    """渲染「项目已建好、但还没有会话」的页面。
+
+    空项目进不了 ``collect_book``（它要求 control.db 里至少有一个会话），但索引页
+    已经把「进入」给到它了。与其让这个链接 500，不如照实说明还没跑过、下一步做什么；
+    运行、输入、对话都还没有，就没有什么可省略的。
+    """
+    css = _asset("app.css")
+    font_css = "" if fonts is None else font_face_css(fonts) + "\n"
+    name = escape(program)
+    back = (
+        ""
+        if home is None
+        else f'<a class="home" href="{escape(home, quote=True)}" title="返回项目">←</a>'
+    )
+    return f"""<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{name} · book</title>
+<style>
+{font_css}{css}
+{_EMPTY_STYLE}
+</style>
+</head>
+<body class="book-empty">
+<header class="glass fbar">
+  <div class="brand">{back}<b>{name}</b><span>项目</span></div>
+  <span class="grow"></span>
+  <button class="iconbtn" data-act="theme" title="切换深色 / 浅色" aria-label="切换深色 / 浅色">{THEME_ICONS}</button>
+</header>
+<main class="bk-empty">
+  <span class="chip note">还没有会话</span>
+  <h1>这个项目还没跑过</h1>
+  <p>项目已经建好，但 store 里还没有它的会话、运行和对话，这一页暂时没有可看的内容。</p>
+  <p>下一步：把 <span class="mono">vibe.plugins.yml</span> 里 sessions 的
+  <span class="mono">program</span> 设成「{name}」，在项目目录跑一次
+  <span class="mono">vibectl setup</span>。setup 会复用这个项目并开第一个会话；
+  之后再跑 <span class="mono">vibectl run</span>，流程和结果就会出现在这一页。</p>
+</main>
+<script>
+{THEME_SCRIPT}
+</script>
+</body>
+</html>
+"""
 
 
 def inline(source: str) -> str:
@@ -138,4 +236,5 @@ def render_book(
 
 
 renderBook = render_book
+renderEmptyBook = render_empty_book
 escapeForScript = escape_for_script

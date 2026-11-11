@@ -1,6 +1,10 @@
-"""项目索引上的归档：把项目移出列表，但不从磁盘上抹掉。
+"""项目索引上的写操作：新建与归档。
 
-与 ``inputs_edit`` 同一套约定：
+**新建**只写两样东西：``programs`` 表里一行记录，以及 ``program-repos/<id>`` 下的
+空仓库；不碰会话、输入与运行。新项目停在「还没开过会话」的状态，页面上如实说明。
+名字在落盘前就校验完（空、路径字符、长度、同 store 重名），非法名字不会留下半个目录。
+
+**归档**与 ``inputs_edit`` 同一套约定：
 
 1. **没有真删**：项目仓库与它的全部会话目录移进 ``<store>/.archive/projects/``，
    归档目录里留一份 ``packet.json``（项目名、会话/运行/发布数、理由、原路径、归档路径）。
@@ -23,15 +27,19 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
+from ..session import Program, SessionStore
 from ..util import VibeError, now, readonly_database
 
 __all__ = [
     "ARCHIVE_ROOT",
     "EVENTS_NAME",
+    "FORBIDDEN_NAME_CHARS",
+    "MAX_PROJECT_NAME",
     "PACKET_NAME",
     "PROJECTS_NAME",
     "TABLE_NAME",
     "archive_project",
+    "create_project",
 ]
 
 ARCHIVE_ROOT = ".archive"
@@ -39,6 +47,10 @@ PROJECTS_NAME = "projects"
 PACKET_NAME = "packet.json"
 EVENTS_NAME = "project-events.jsonl"
 TABLE_NAME = "archived_projects"
+
+# 这些字符既是 Windows 的非法文件名，也会让项目名看起来像一条路径。
+FORBIDDEN_NAME_CHARS = '/\\:*?"<>|'
+MAX_PROJECT_NAME = 64
 
 ARCHIVED_TABLE = """
 CREATE TABLE IF NOT EXISTS archived_projects (
@@ -48,6 +60,73 @@ CREATE TABLE IF NOT EXISTS archived_projects (
   dir TEXT NOT NULL
 )
 """
+
+
+def _clean_name(raw: object) -> str:
+    """校验项目名；返回去掉首尾空白后的名字。
+
+    在任何写盘动作之前调用：不合法的名字不建目录、不写库。
+    """
+    name = ("" if raw is None else str(raw)).strip()
+    if not name:
+        raise VibeError("项目名不能为空")
+    bad = next((char for char in name if char in FORBIDDEN_NAME_CHARS), None)
+    if bad is not None:
+        # 报出具体是哪个字符：用户往往看不出全角与半角、斜杠与反斜杠的区别。
+        raise VibeError(f'项目名不能包含 / \\ : * ? " < > | 这些字符（发现「{bad}」）')
+    if name in (".", ".."):
+        raise VibeError("项目名不能是 . 或 ..")
+    if len(name) > MAX_PROJECT_NAME:
+        raise VibeError(f"项目名最长 {MAX_PROJECT_NAME} 个字符，当前 {len(name)} 个")
+    return name
+
+
+def _duplicate_name(store: Path, name: str) -> tuple[str, bool] | None:
+    """同 store 内按名字找重复（忽略大小写），连已归档的一起算。
+
+    归档只把项目移出索引，programs 里那一行还在；而 ``vibectl setup`` 是按名字
+    复用程序的，若允许同名，它可能落到归档的那个项目上，新项目就永远开不出会话。
+    """
+    path = store / "control.db"
+    if not path.is_file():
+        raise VibeError(f"不是 store（缺 control.db）：{store}")
+    try:
+        with readonly_database(path) as db:
+            rows = [
+                (str(row["id"]), str(row["name"]))
+                for row in db.execute("SELECT id, name FROM programs")
+            ]
+            archived: set[str] = set()
+            if db.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (TABLE_NAME,)
+            ).fetchone() is not None:
+                archived = {
+                    str(row["program_id"])
+                    for row in db.execute("SELECT program_id FROM archived_projects")
+                }
+    except sqlite3.Error as error:
+        raise VibeError(f"无法读取 control.db：{path}：{error}") from error
+    wanted = name.casefold()
+    for identifier, existing in rows:
+        if existing.casefold() == wanted:
+            return existing, identifier in archived
+    return None
+
+
+def create_project(store: str | Path, name: str) -> Program:
+    """在 store 里建一个空项目：只有空仓库与 programs 记录，没有会话。
+
+    返回新项目；索引页每次请求都会重读 control.db，所以建完不需要再补别的东西。
+    """
+    root = Path(store).resolve()
+    clean = _clean_name(name)
+    duplicate = _duplicate_name(root, clean)
+    if duplicate is not None:
+        existing, archived = duplicate
+        suffix = "，它已归档" if archived else ""
+        raise VibeError(f"这个 store 里已有同名项目「{existing}」（不区分大小写{suffix}）")
+    with SessionStore.open(root) as db:
+        return db.create_program(clean)
 
 
 @dataclass(frozen=True)

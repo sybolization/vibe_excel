@@ -1,8 +1,9 @@
 """本地服务：现场采集页面 + 构建期输入的增删接口。
 
 - 页面不落盘：每次请求重新读 ``control.db`` 和运行目录，刷新即最新
-- 写接口只有 ``/api/inputs/*`` 与 ``/api/projects/archive``：前者写 ground-truth 目录、
-  清单名单、``input-events.jsonl`` 与 ``.trash/.archive``；后者把项目目录移进
+- 写接口只有 ``/api/inputs/*``、``/api/projects/create`` 与 ``/api/projects/archive``：
+  输入接口写 ground-truth 目录、清单名单与 ``input-events.jsonl``；新建接口只在
+  control.db 里加一行 programs 和一个空仓库；归档接口把项目目录移进
   ``.archive/projects``、写 ``project-events.jsonl`` 并在 control.db 记一行归档
 - 只绑 127.0.0.1，默认端口 8731
 """
@@ -35,11 +36,11 @@ from .inputs_edit import (
     undo_removal,
 )
 from .projects import collect_projects, page_name
-from .projects_edit import archive_project
-from .render import _ASSETS, render_book
+from .projects_edit import archive_project, create_project
+from .render import _ASSETS, render_book, render_empty_book
 from .types import ProjectSummary
 
-__all__ = ["serve"]
+__all__ = ["resolve_store", "serve"]
 
 _ASSET_TYPES = {
     ".ttf": "font/ttf",
@@ -53,6 +54,32 @@ _LOCK = threading.Lock()
 
 def _json(payload: dict[str, Any]) -> bytes:
     return json.dumps(payload, ensure_ascii=False).encode("utf-8")
+
+
+def _store_label(store: Path) -> str:
+    """索引页与新建弹层对同一个 store 用同一个显示名。
+
+    目录名就叫 store 时单独看没有信息量，带上上一层：多 store 时才能分清。
+    """
+    name = store.name
+    if name.lower() != "store":
+        return name
+    parent = store.parent.name
+    return f"{parent}/{name}" if parent else name
+
+
+def resolve_store(stores: list[Path], raw: object) -> Path:
+    """把页面带回来的 store 路径对回已知列表，认不出就报错。
+
+    ``store`` 来自 HTTP 请求体，不能拿它直接建目录；只接受这个服务打开的那些。
+    """
+    value = "" if raw is None else str(raw).strip()
+    if not value:
+        raise VibeError("缺少 store：不知道要在哪个 store 里建项目")
+    for store in stores:
+        if str(store) == value:
+            return store
+    raise VibeError(f"未知的 store：{value}")
 
 
 def impact_from_view(
@@ -197,13 +224,19 @@ class _Handler(BaseHTTPRequestHandler):
         for store in self.stores:
             for project in collect_projects(store):
                 if multi:
-                    name = store.name
-                    project["store"] = name if name.lower() != "store" else f"{store.parent.name}/{name}"
+                    project["store"] = _store_label(store)
                 pairs.append((store, project))
         label = self.stores[0].name if not multi else f"{len(self.stores)} 个 store"
         pages = {str(project["id"]): page_name(str(project["id"])) for _, project in pairs}
+        # 新建弹层要知道每个 store 的绝对路径：接口只认这个列表里的路径。
+        choices = [(str(store), _store_label(store)) for store in self.stores]
         return render_index(
-            [project for _, project in pairs], store_label=label, pages=pages, can_archive=True
+            [project for _, project in pairs],
+            store_label=label,
+            pages=pages,
+            can_archive=True,
+            can_create=True,
+            store_choices=choices,
         )
 
     def _project_html(self, name: str) -> str | None:
@@ -211,6 +244,12 @@ class _Handler(BaseHTTPRequestHandler):
             for project in collect_projects(store):
                 if page_name(str(project["id"])) != name:
                     continue
+                if project["activeSessionId"] is None:
+                    # 刚建好的项目还没有会话，collect_book 会直接报错。
+                    # 与其回 500，不如照实说它还没跑过、下一步做什么。
+                    return render_empty_book(
+                        program=str(project["name"]), fonts="fonts/", home="index.html"
+                    )
                 view = collect_book(
                     store,
                     program_id=str(project["id"]),
@@ -310,7 +349,7 @@ class _Handler(BaseHTTPRequestHandler):
         raise VibeError(f"项目不存在或已归档：{program_id}")
 
     def _payload(self, body: bytes) -> dict[str, Any]:
-        """归档接口的 JSON 入参；坏请求也要回一句人话，而不是断开连接。"""
+        """写接口的 JSON 入参；坏请求也要回一句人话，而不是断开连接。"""
         try:
             payload = json.loads(body or b"{}")
         except json.JSONDecodeError as error:
@@ -320,6 +359,13 @@ class _Handler(BaseHTTPRequestHandler):
         return payload
 
     def _mutate(self, path: str, body: bytes) -> None:
+        if path == "/api/projects/create":
+            payload = self._payload(body)
+            # store 只认服务启动时给的那几个：请求体里的路径不能当写盘目标用。
+            target = resolve_store(self.stores, payload.get("store"))
+            program = create_project(target, str(payload.get("name") or ""))
+            self._api({"ok": True, "id": str(program.id), "name": program.name})
+            return
         if path == "/api/projects/archive":
             payload = self._payload(body)
             program_id = str(payload.get("programId") or "").strip()

@@ -23,7 +23,9 @@ from vibe_excel.book.projects_edit import (
     PROJECTS_NAME,
     TABLE_NAME,
     archive_project,
+    create_project,
 )
+from vibe_excel.book.serve import resolve_store
 from vibe_excel.book.types import ProjectSummary
 from vibe_excel.session import SessionStore
 from vibe_excel.util import VibeError
@@ -64,6 +66,14 @@ def _store(
     finally:
         connection.close()
     return root, program.id, session_id
+
+
+def _empty_store(tmp_path: Path) -> Path:
+    """只有 control.db、一个项目都没有的 store。"""
+    root = tmp_path / "store"
+    store = SessionStore.open(root)
+    store.close()
+    return root
 
 
 def test_archive_moves_dirs_writes_packet_and_registers(tmp_path: Path) -> None:
@@ -264,3 +274,111 @@ def test_render_index_offers_delete_only_when_server_hosted() -> None:
     assert 'data-runs="2"' in live
     assert 'data-publishes="1"' in live
     assert 'id="ix-note"' in live
+
+
+def test_create_project_adds_an_empty_project_to_the_index(tmp_path: Path) -> None:
+    root = _empty_store(tmp_path)
+
+    program = create_project(root, "  销售分析  ")
+
+    assert program.name == "销售分析"
+    assert (root / "program-repos" / program.id).is_dir()
+    projects = collect_projects(root)
+    assert [(item["id"], item["name"]) for item in projects] == [(program.id, "销售分析")]
+    # 新建的项目是空的：没有会话、没有运行，索引要如实这么显示
+    assert projects[0]["sessions"] == []
+    assert projects[0]["activeSessionId"] is None
+    assert projects[0]["runCount"] == 0
+
+
+def test_create_project_rejects_case_insensitive_duplicates(tmp_path: Path) -> None:
+    root = _empty_store(tmp_path)
+    create_project(root, "Sales")
+
+    with pytest.raises(VibeError, match="同名项目"):
+        create_project(root, "  sales ")
+    # 被拒的那次不能留下第二个项目
+    assert len(collect_projects(root)) == 1
+
+
+def test_create_project_rejects_archived_duplicate(tmp_path: Path) -> None:
+    root, program_id, _ = _store(tmp_path, name="archived-one")
+    archive_project(root, program_id)
+
+    # 归档只移出索引，programs 里那行还在；setup 按名字复用程序，同名会落到它上面
+    with pytest.raises(VibeError, match="已归档"):
+        create_project(root, "ARCHIVED-ONE")
+
+
+@pytest.mark.parametrize(
+    ("name", "reason"),
+    [
+        ("", "不能为空"),
+        ("   ", "不能为空"),
+        ("a/b", "不能包含"),
+        ("a\\b", "不能包含"),
+        ("a:b", "不能包含"),
+        ("a*b", "不能包含"),
+        ("a?b", "不能包含"),
+        ('a"b', "不能包含"),
+        ("a<b", "不能包含"),
+        ("a>b", "不能包含"),
+        ("a|b", "不能包含"),
+        (".", "不能是 . 或 .."),
+        ("..", "不能是 . 或 .."),
+        ("长" * 65, "最长 64"),
+    ],
+)
+def test_create_project_rejects_bad_names(tmp_path: Path, name: str, reason: str) -> None:
+    root = _empty_store(tmp_path)
+
+    with pytest.raises(VibeError, match=reason):
+        create_project(root, name)
+    # 校验在写盘之前：非法名字不该留下仓库目录
+    assert not (root / "program-repos").exists()
+
+
+def test_create_project_accepts_name_at_the_length_limit(tmp_path: Path) -> None:
+    root = _empty_store(tmp_path)
+    name = "长" * 64
+
+    assert create_project(root, name).name == name
+
+
+def test_resolve_store_only_accepts_the_stores_the_service_opened(tmp_path: Path) -> None:
+    known = (tmp_path / "store").resolve()
+    elsewhere = (tmp_path / "elsewhere").resolve()
+
+    assert resolve_store([known], str(known)) == known
+    with pytest.raises(VibeError, match="未知的 store"):
+        resolve_store([known], str(elsewhere))
+    with pytest.raises(VibeError, match="缺少 store"):
+        resolve_store([known], "")
+
+
+def test_render_index_offers_create_only_when_server_hosted() -> None:
+    choices = [("C:\\data\\store", "store")]
+
+    # build 出来的静态站点没有接口可写盘：新建入口整个不渲染
+    static = render_index([], store_label="store")
+    assert 'data-act="create"' not in static
+    assert "/api/projects/create" not in static
+    assert ">新建项目</button>" not in static
+
+    live = render_index([], store_label="store", can_create=True, store_choices=choices)
+    assert 'data-act="create"' in live
+    assert ">新建项目</button>" in live
+    assert "/api/projects/create" in live
+    # 只有一个 store 时不出现选择器；路径仍然交给页面，提交时才有 store 可用
+    assert '<select class="ix-store">' not in live
+    assert '"path":"C:\\\\data\\\\store"' in live
+
+    many = render_index(
+        [],
+        store_label="2 个 store",
+        can_create=True,
+        store_choices=[("C:\\a", "a"), ("C:\\b", "b")],
+    )
+    assert '<select class="ix-store">' in many
+    assert '<option value="C:\\a">a</option>' in many
+    assert '<option value="C:\\b">b</option>' in many
