@@ -22,8 +22,8 @@
 #>
 [CmdletBinding()]
 param(
-    # 数据根目录。默认是仓库的上一级（store 通常与仓库并排放）
-    [string]$Root = (Split-Path $PSScriptRoot -Parent),
+    # 数据根目录。留空则取仓库的上一级（store 通常与仓库并排放）
+    [string]$Root,
     # 显式指定 store，可给多个
     [string[]]$Store = @(),
     [string]$Inputs,
@@ -36,6 +36,10 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+
+if (-not $Root) {
+    $Root = Split-Path $PSScriptRoot -Parent
+}
 
 # 输出用 UTF-8，避免中文在控制台变成乱码
 $env:PYTHONUTF8 = "1"
