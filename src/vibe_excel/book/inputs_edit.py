@@ -192,11 +192,15 @@ def _set_files(text: str, names: list[str]) -> str:
 
 
 def _write_files(ground_truth: GroundTruth, names: list[str]) -> None:
-    text = ground_truth.manifest.read_text(encoding="utf-8")
+    path = ground_truth.manifest
+    raw = path.read_bytes()
+    text = raw.decode("utf-8")
     updated = _set_files(text, names)
-    temporary = ground_truth.manifest.with_suffix(ground_truth.manifest.suffix + ".tmp")
-    temporary.write_text(updated, encoding="utf-8", newline="\n")
-    os.replace(temporary, ground_truth.manifest)
+    # 行尾跟着原文件走：改成 LF 会让 CRLF 仓库里这份清单永远显示「已修改」
+    newline = "\r\n" if "\r\n" in text else "\n"
+    temporary = path.with_suffix(path.suffix + ".tmp")
+    temporary.write_bytes(updated.replace("\r\n", "\n").replace("\n", newline).encode("utf-8"))
+    os.replace(temporary, path)
 
 
 def _append_event(store: Path, event: dict[str, object]) -> None:

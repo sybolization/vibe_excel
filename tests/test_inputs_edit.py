@@ -227,6 +227,21 @@ def test_last_removal_ignores_promoted_buckets(
         undo_removal(ground, store)
 
 
+def test_manifest_line_endings_survive_a_rewrite(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _case(tmp_path, monkeypatch)
+    manifest = tmp_path / "vibe.plugins.yml"
+    # CRLF 的清单被改写成 LF 之后，git 里这份文件会一直显示「已修改」
+    manifest.write_bytes(manifest.read_bytes().replace(b"\n", b"\r\n"))
+    ground = resolve_ground_truth(manifest)
+
+    add_file(ground, "extra.xlsx", b"xlsx-bytes")
+
+    assert b"\r\n" in manifest.read_bytes()
+    assert b"- extra.xlsx\r\n" in manifest.read_bytes()
+
+
 def test_remove_missing_file_raises(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _, store = _case(tmp_path, monkeypatch)
     ground = resolve_ground_truth(tmp_path / "vibe.plugins.yml")
