@@ -161,8 +161,11 @@ def session_directory(store: Path, session_id: str) -> Path:
     return store / "sessions" / session_id / "sessions"
 
 
-def pick_conversation(directory: Path, conversation_id: str | None) -> Path:
-    """要续写哪一段对话：给了 id 就用它，否则用最近的一段。"""
+def pick_conversation(directory: Path, conversation_id: str | None, *, fresh: bool = False) -> Path:
+    """要续写哪一段对话：给了 id 就用它，否则用最近的一段。
+
+    ``fresh=True`` 是「新建对话」：不看旧的，直接开一份新的（文件名撞了就加后缀）。
+    """
     if not directory.is_dir():
         directory.mkdir(parents=True, exist_ok=True)
     existing = sorted(
@@ -175,10 +178,15 @@ def pick_conversation(directory: Path, conversation_id: str | None) -> Path:
             if item.stem == conversation_id:
                 return item
         raise VibeError(f"找不到这段对话：{conversation_id}")
-    if existing:
+    if existing and not fresh:
         return existing[0]
     stamp = datetime.now(UTC).strftime("%Y-%m-%dT%H-%M-%S-%f")[:-3] + "Z"
-    return directory / f"{stamp}_chat.jsonl"
+    candidate = directory / f"{stamp}_chat.jsonl"
+    suffix = 1
+    while candidate.exists():
+        candidate = directory / f"{stamp}-{suffix}_chat.jsonl"
+        suffix += 1
+    return candidate
 
 
 def append_record(path: Path, record: dict[str, Any]) -> None:

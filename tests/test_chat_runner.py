@@ -285,6 +285,73 @@ def test_stop_terminates_the_running_process(tmp_path: Path, monkeypatch: pytest
     assert killed.wait(timeout=2), "停止没有把子进程 terminate 掉"
 
 
+def test_new_flag_starts_a_separate_conversation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """new=true 要真的新开一段，而不是并进最近那段。"""
+    store, session, program = _make_conversation(tmp_path)
+    runner = _runner_with(
+        monkeypatch,
+        [{"type": "text", "delta": "答"}, {"type": "reply", "text": "答", "thinking": "", "calls": "[]"}],
+    )
+
+    first = runner.send(store, session, program, "第一段")
+    second = runner.send(store, session, program, "第二段", new=True)
+    assert first["conversationId"] != second["conversationId"]
+
+    # 新的那段是独立文件：造的那段还在，另开了一份
+    directory = store / "sessions" / session / "sessions"
+    deadline = time.time() + 5
+    while time.time() < deadline and len(list(directory.glob("*.jsonl"))) < 2:
+        time.sleep(0.02)
+    files = sorted(item.name for item in directory.glob("*.jsonl"))
+    assert len(files) == 2, files
+    assert files[0] == "2026-01-01T00-00-00-000Z_chat.jsonl"
+
+
+def test_wake_during_a_turn_is_not_saved_as_user_text(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """正在跑的时候 job 结束：唤醒文本只进上下文，不落成用户发言。"""
+    store, session, program = _make_conversation(tmp_path)
+    release = threading.Event()
+    seen: list[str] = []
+
+    def fake_stream(_config: Any, messages: list[dict[str, str]], **_kwargs: Any) -> Iterator[dict[str, str]]:
+        seen.append(messages[-1]["content"])
+        release.wait(timeout=5)
+        yield {"type": "text", "delta": "答"}
+        yield {"type": "reply", "text": "答", "thinking": "", "calls": "[]"}
+
+    monkeypatch.setattr(chat_runner, "stream_events", fake_stream)
+    monkeypatch.setattr(chat_runner, "snapshot", lambda _workspace: "")
+    monkeypatch.setattr(chat_runner, "ensure_helper", lambda _workspace: None)
+    runner = Runner()
+
+    result = runner.send(store, session, program, "用户的问题")
+    conversation_id = result["conversationId"]
+    conversation = runner._conversations[conversation_id]  # noqa: SLF001
+
+    # 这一轮还没跑完就往队里塞一个唤醒
+    runner._wake(conversation, "后台任务结束：j9")  # noqa: SLF001
+    release.set()
+
+    deadline = time.time() + 5
+    while time.time() < deadline and len(seen) < 2:
+        time.sleep(0.02)
+    assert len(seen) == 2, seen
+
+    path = store / "sessions" / session / "sessions" / f"{conversation_id}.jsonl"
+    records = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
+    user_texts = [
+        item["message"]["content"][0]["text"]
+        for item in records
+        if item["message"]["role"] == "user"
+    ]
+    assert "后台任务结束：j9" not in user_texts, "唤醒不该落成用户发言"
+    assert user_texts == ["老问题", "用户的问题"]
+
+
 def test_send_rejects_empty_message(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     store, session, program = _make_conversation(tmp_path)
     runner = _runner_with(monkeypatch, [])

@@ -56,7 +56,7 @@ class _Conversation:
     path: Path
     workspace: Path
     program: str
-    pending: list[str] = field(default_factory=list)
+    pending: list[tuple[str, bool]] = field(default_factory=list)
     busy: bool = False
     turn: _Turn = field(default_factory=_Turn)
     subscribers: list[queue.Queue[dict[str, Any]]] = field(default_factory=list)
@@ -121,7 +121,8 @@ class Runner:
         from .chat import session_directory
 
         directory = session_directory(store, session_id)
-        path = pick_conversation(directory, None if new else conversation_id)
+        # new=True 是「新建对话」：fresh 让它跳过旧的那些，直接开一份新的
+        path = pick_conversation(directory, conversation_id, fresh=new)
         with self._lock:
             found = self._conversations.get(path.stem)
             if found is None:
@@ -149,7 +150,7 @@ class Runner:
         # 人说话了：唤醒计数重来
         conversation.wakes = 0
         with conversation.lock:
-            conversation.pending.append(clean)
+            conversation.pending.append((clean, False))
             start = not conversation.busy
             if start:
                 conversation.busy = True
@@ -158,7 +159,7 @@ class Runner:
         if start:
             threading.Thread(
                 target=self._drain,
-                args=(conversation, context, False),
+                args=(conversation, context),
                 name=f"chat-{conversation.path.stem}",
             ).start()
         return {
@@ -193,13 +194,15 @@ class Runner:
 
     # ---- 干活 ----
 
-    def _drain(self, conversation: _Conversation, context: dict[str, Any] | None, resume: bool) -> None:
+    def _drain(self, conversation: _Conversation, context: dict[str, Any] | None) -> None:
         while True:
             with conversation.lock:
                 if not conversation.pending:
                     conversation.busy = False
                     return
-                text = conversation.pending.pop(0)
+                # 每一项自带「它是不是唤醒」：整段 drain 共用一个标志会把唤醒文本
+                # 当成用户消息落盘——队列里可能同时有真话和唤醒。
+                text, resume = conversation.pending.pop(0)
                 conversation.turn = _Turn()
             try:
                 self._turn(conversation, text, context, resume=resume)
@@ -244,13 +247,13 @@ class Runner:
     def _wake(self, conversation: _Conversation, text: str) -> None:
         """把一段内容排进对话，让 agent 接着说（不伪装成用户发言）。"""
         with conversation.lock:
-            conversation.pending.append(text)
+            conversation.pending.append((text, True))
             start = not conversation.busy
             if start:
                 conversation.busy = True
         if start:
             threading.Thread(
-                target=self._drain, args=(conversation, None, True), name="chat-wake"
+                target=self._drain, args=(conversation, None), name="chat-wake"
             ).start()
 
     def _turn(
