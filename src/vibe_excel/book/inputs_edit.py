@@ -373,11 +373,17 @@ def promote_trash(store: Path) -> list[str]:
     if not trash.is_dir():
         return []
     archive = store / ARCHIVE_NAME
-    archive.mkdir(parents=True, exist_ok=True)
+    # 撤回过的移出不算数：文件已经回到输入里，不该再留一份「已归档」的记录。
+    undone = {str(item.get("trash") or "") for item in events(store) if item.get("kind") == "undo"}
     moved: list[str] = []
     for bucket in sorted(trash.iterdir()):
         if not bucket.is_dir():
             continue
+        if str(bucket) in undone:
+            shutil.rmtree(bucket, ignore_errors=True)
+            continue
+        # 真的搬东西时才建归档目录：什么都没归档就不该留下一个空壳
+        archive.mkdir(parents=True, exist_ok=True)
         destination = archive / bucket.name
         if destination.exists():
             destination = archive / f"{bucket.name}-{len(moved) + 1}"

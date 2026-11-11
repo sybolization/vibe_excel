@@ -200,6 +200,19 @@ def test_promote_trash_moves_packets_to_archive(
     assert not (store / ".trash").exists()
 
 
+def test_promote_skips_undone_removals(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _, store = _case(tmp_path, monkeypatch)
+    ground = resolve_ground_truth(tmp_path / "vibe.plugins.yml")
+    remove_file(ground, store, "orders.xlsx", reason="手滑")
+    undo_removal(ground, store)
+
+    # 撤回过的移出不该被当成历史输入归档，否则包里会留下一条「已移出」的假记录
+    assert promote_trash(store) == []
+    assert not (store / ".archive").exists()
+
+
 def test_remove_missing_file_raises(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _, store = _case(tmp_path, monkeypatch)
     ground = resolve_ground_truth(tmp_path / "vibe.plugins.yml")

@@ -954,7 +954,7 @@ if (location.search.includes("selftest")) {
         note("正在重建输入批次……");
         const data = await postJson("/api/inputs/rebuild", {});
         applyState(data.state);
-        note(data.ok ? "输入批次已重建，需要重新运行" : "重建失败，看终端输出");
+        note(data.ok ? "输入批次已重建，需要重新运行" : `重建失败：${data.failure || "看终端输出"}`, data.ok ? undefined : "bad");
         action.disabled = false;
       }
     } catch (error) {

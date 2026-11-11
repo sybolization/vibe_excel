@@ -54,13 +54,30 @@ def _json(payload: dict[str, Any]) -> bytes:
 
 
 def _rebuild_batch() -> dict[str, object]:
-    """调 setup：把当前 ground-truth 快照成新批次，然后把 .trash 归档成 .archive。"""
+    """调 setup：把当前 ground-truth 快照成新批次，然后把 .trash 归档成 .archive。
+
+    exec 插件要求 config.python 是解释器的绝对路径。服务本身就是用那个解释器起的，
+    缺环境变量时按 sys.executable 兜底——否则会以「插件加载失败」收场，而用户看到的
+    只是一句「未知命令 setup」，根本猜不到原因。
+    """
+    import os
+    import sys
+
     from ..cli import run_cli  # 延迟导入：只有重建时才需要整个宿主
 
+    os.environ.setdefault("VIBE_EXCEL_PYTHON", sys.executable)
     buffer = io.StringIO()
     with redirect_stdout(buffer), redirect_stderr(buffer):
         code = run_cli(["setup"])
-    return {"code": code, "output": buffer.getvalue()}
+    output = buffer.getvalue()
+    failure = ""
+    if code != 0:
+        # 宿主把真正的失败原因打在最前面（插件加载失败 / 配置校验），挑出来给页面看
+        for line in output.splitlines():
+            if "失败" in line or "错误" in line:
+                failure = line.strip()
+                break
+    return {"code": code, "output": output, "failure": failure}
 
 
 class _Handler(BaseHTTPRequestHandler):
