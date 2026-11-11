@@ -426,7 +426,7 @@
   const files = (I === null ? [] : I.files) || [];
   const tray = document.createElement("div");
   tray.className = "tray";
-  /* 托盘分两类来源：已在批次里的（画布上有它）、只在 ground-truth 里的（待物化）。 */
+  /* 托盘分两类来源：已在批次里的（画布上有它）、只在 ground-truth 里的（还没人处理）。 */
   const batchFiles = () => (I === null ? [] : I.files) || [];
   const groundFiles = () => {
     const state = ground();
@@ -461,7 +461,7 @@
       for (const f of groundFiles()) {
         if (inBatch.has(f.name)) continue;
         rows.push(`<div class="row local" data-p="${esc(f.name)}">
-          <span class="t"><span class="n" title="${esc(f.name)}">${esc(f.name)}</span><span class="m">${kb(f.bytes)} · 待物化</span></span>
+          <span class="t"><span class="n" title="${esc(f.name)}">${esc(f.name)}</span><span class="m">${kb(f.bytes)} · 待处理</span></span>
           <span class="del" data-del="${esc(f.name)}" title="移出这个文件">×</span>
         </div>`);
       }
@@ -841,6 +841,14 @@ if (location.search.includes("selftest")) {
     out.push(`hl=${firstHl}->${secondHl}`);
     out.push(`hlChanged=${firstHl !== secondHl && hotOf() > 0}`);
 
+    /* 点一个「还没被处理」的文件：提示要能指导下一步，而不是解释内部概念 */
+    const waiting = tray.querySelector("[data-p]");
+    if (waiting !== null) {
+      waiting.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      const toast = document.getElementById("toast");
+      out.push(`waiting=${toast === null ? "miss" : toast.textContent.trim().slice(0, 40)}`);
+    }
+
     /* 对话区：收起 / 展开 / 列表 / 拖宽 */
     const st = () => window.__CHATSTATE();
     const pick = (s) => document.querySelector(s);
@@ -1116,7 +1124,8 @@ if (location.search.includes("selftest")) {
     if (pending !== null) {
       const name = pending.getAttribute("data-p");
       select(batchFiles().findIndex((f) => f.name === name), true);
-      note(`${name} 还在 ground-truth 里，重建批次后才会出现在画布上`);
+      // 这句要能指导下一步：文件在，但还没人处理过它
+      note(`${name} 还没被处理：先在对话里说清它是什么表、怎么用，再重建批次`);
       return;
     }
     const z = e.target.closest("[data-z]");
