@@ -17,6 +17,7 @@ import os
 import shutil
 import subprocess
 import sys
+import threading
 import urllib.error
 import urllib.request
 from collections.abc import Sequence
@@ -128,6 +129,15 @@ def probe(config: ChatConfig) -> tuple[bool, str]:
     return True, ""
 
 
+# 追加是「读-改-写」之外的最小动作：加锁只为让两句话不会互相插进对方中间
+_WRITE_LOCK = threading.Lock()
+
+# 上下文给太多，模型又慢又贵，而且超长历史对「接着聊」没有帮助
+_HISTORY_MESSAGES = 12
+_HISTORY_CHARS = 6000
+_MESSAGE_CHARS = 2000
+
+
 def _timestamp() -> str:
     return datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
 
@@ -165,12 +175,16 @@ def append_message(path: Path, role: str, text: str) -> None:
         "timestamp": _timestamp(),
         "message": {"role": role, "content": [{"type": "text", "text": text}]},
     }
-    with path.open("a", encoding="utf-8", newline="\n") as handle:
+    with _WRITE_LOCK, path.open("a", encoding="utf-8", newline="\n") as handle:
         handle.write(json.dumps(record, ensure_ascii=False) + "\n")
 
 
-def read_messages(path: Path, *, limit: int = 12) -> list[dict[str, str]]:
-    """取最近几条对话作为上下文，工具块不进上下文。"""
+def read_messages(path: Path, *, limit: int = _HISTORY_MESSAGES) -> list[dict[str, str]]:
+    """取最近几条对话作为上下文，工具块不进上下文。
+
+    有字数预算：一次贴进去三十万字，模型会慢到没法用，而且钱是用户出的。
+    从最近的往回取，超预算就停；单条太长先截断，至少让最新的那句完整在场。
+    """
     if not path.is_file():
         return []
     try:
@@ -204,7 +218,20 @@ def read_messages(path: Path, *, limit: int = 12) -> list[dict[str, str]]:
         joined = "\n".join(part for part in text_parts if part).strip()
         if joined:
             messages.append({"role": str(role), "content": joined})
-    return messages[-limit:]
+    picked: list[dict[str, str]] = []
+    budget = _HISTORY_CHARS
+    for message in reversed(messages):
+        content = message["content"]
+        if len(content) > _MESSAGE_CHARS:
+            content = content[:_MESSAGE_CHARS] + "…"
+        if picked and len(content) > budget:
+            break
+        budget -= len(content)
+        picked.append({"role": message["role"], "content": content})
+        if len(picked) >= limit:
+            break
+    picked.reverse()
+    return picked
 
 
 def system_prompt(

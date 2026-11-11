@@ -88,6 +88,20 @@ def test_append_and_read_roundtrip(tmp_path: Path) -> None:
     ]
 
 
+def test_read_messages_keeps_the_newest_within_budget(tmp_path: Path) -> None:
+    path = _store(tmp_path) / "sessions" / SESSION / "sessions" / "long.jsonl"
+    for index in range(40):
+        append_message(path, "user", f"第 {index} 句" + "填充" * 200)
+
+    picked = read_messages(path)
+
+    # 条数和字数都要有上限，否则一次贴几万字进去，模型又慢又贵
+    assert len(picked) <= 12
+    assert sum(len(item["content"]) for item in picked) <= 6000 + 2000
+    # 最后一句必须在：上下文没了最新的那句就等于没上下文
+    assert picked[-1]["content"].startswith("第 39 句")
+
+
 def test_pick_conversation_resumes_the_latest_one(tmp_path: Path) -> None:
     directory = _store(tmp_path) / "sessions" / SESSION / "sessions"
     older = directory / "older.jsonl"
