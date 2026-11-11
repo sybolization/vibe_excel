@@ -508,6 +508,18 @@ def stream_events(
                 )
                 yield {"type": "call", "id": call_id, "name": name, "brief": brief}
                 continue
+            if kind_outer == "tool_execution_update":
+                # 命令还在跑，pi 一直在推中间输出。不接这一条的话，长命令在页面上
+                # 是一段空白，等结束才一次性出现——正是最容易让人以为卡死的地方。
+                call_id = str(record.get("toolCallId") or "")
+                text_out, _failed = _tool_text(record.get("partialResult"))
+                if text_out:
+                    yield {
+                        "type": "progress",
+                        "id": call_id,
+                        "text": text_out[-2000:],
+                    }
+                continue
             if kind_outer == "tool_execution_end":
                 call_id = str(record.get("toolCallId") or "")
                 text_out, failed = _tool_text(record.get("result"))

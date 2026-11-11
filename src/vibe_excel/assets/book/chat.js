@@ -174,9 +174,11 @@
 
   function toolBlock(b) {
     /* 一次调用就是一行灰字：名字和参数同色同粗细。
-       打勾打叉是噪音——没出错就是常态，不需要宣布。 */
+       打勾打叉是噪音——没出错就是常态，不需要宣布。
+       跑着的时候带上 live：让人知道它还在动，而不是卡住了。 */
     const badge = b.ok ? "" : `<span class="fail"><span class="fd"></span>${esc(failLabel(b.result))}</span>`;
-    return `<details class="blk tool"><summary><span class="tn">${esc(b.name)}</span><span class="tb" title="${esc(b.brief)}">${esc(b.brief)}</span>${badge}</summary>${b.result === "" ? "" : `<pre>${esc(b.result)}</pre>`}</details>`;
+    const live = b.live === true;
+    return `<details class="blk tool${live ? " live" : ""}"${live ? " open" : ""}><summary><span class="tn">${esc(b.name)}</span><span class="tb" title="${esc(b.brief)}">${esc(b.brief)}</span>${badge}</summary>${b.result === "" ? "" : `<pre>${esc(b.result)}</pre>`}</details>`;
   }
 
   /* 思考块：默认折叠，点开才看。它不属于「agent 说的话」，所以单独一块。 */
@@ -483,11 +485,22 @@
         paint();
         return;
       }
+      if (event.type === "progress") {
+        /* 命令还在跑，中间输出先铺出来：长命令不该在页面上是一段空白 */
+        const block = calls.get(String(event.id ?? ""));
+        if (block !== undefined) {
+          block.result = event.text ?? "";
+          block.live = true;
+          paint();
+        }
+        return;
+      }
       if (event.type === "result") {
         const block = calls.get(String(event.id ?? ""));
         if (block !== undefined) {
           block.ok = String(event.ok ?? "1") !== "0";
           block.result = event.text ?? "";
+          block.live = false;
           const ms = Number(event.ms);
           block.ms = Number.isFinite(ms) ? ms : null;
           paint();

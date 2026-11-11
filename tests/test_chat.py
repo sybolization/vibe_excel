@@ -21,6 +21,7 @@ from vibe_excel.book.chat import (
     probe,
     read_messages,
     send,
+    stream_events,
     strip_tool_markup,
     system_prompt,
 )
@@ -235,6 +236,70 @@ def test_probe_asks_for_the_key_only_when_remote(monkeypatch: pytest.MonkeyPatch
         key_env="NOPE_KEY", timeout_ms=1000, cli="",
     )
     assert probe(local) == (True, "")
+
+
+def _stream_from_records(
+    tmp_path: Path, records: list[dict[str, object]], monkeypatch: pytest.MonkeyPatch
+) -> list[dict[str, object]]:
+    """把一串 pi 的 JSONL 记录喂给 stream_events，看它翻成哪些页面事件。"""
+    body = "".join(json.dumps(item, ensure_ascii=False) + "\n" for item in records)
+    cli = _fake_pi(tmp_path, body)
+    monkeypatch.setenv("VIBE_EXCEL_PI", str(cli))
+    monkeypatch.setenv("OPENCODE_API_KEY", "test-key")  # probe 会确认 key 在不在
+    config = ChatConfig(
+        backend="pi",
+        provider="p",
+        model="m",
+        base_url="",
+        key_env="OPENCODE_API_KEY",
+        timeout_ms=30_000,
+        cli=str(cli),
+    )
+    return list(stream_events(config, [], workspace=tmp_path))
+
+
+def test_tool_output_streams_before_the_command_ends(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """命令跑着的时候，中间输出要当成 progress 推出来。"""
+    records = [
+        {
+            "type": "tool_execution_start",
+            "toolCallId": "c1",
+            "toolName": "bash",
+            "args": {"command": "python slow.py"},
+        },
+        {
+            "type": "tool_execution_update",
+            "toolCallId": "c1",
+            "toolName": "bash",
+            "partialResult": {
+                "content": [{"type": "text", "text": "第 1 行\n第 2 行"}],
+                "structuredContent": {"output": "第 1 行\n第 2 行", "exit_code": None},
+            },
+        },
+        {
+            "type": "tool_execution_end",
+            "toolCallId": "c1",
+            "toolName": "bash",
+            "result": {
+                "content": [{"type": "text", "text": "第 1 行\n第 2 行\n第 3 行"}],
+                "structuredContent": {"output": "第 1 行\n第 2 行\n第 3 行", "exit_code": 0},
+            },
+            "isError": False,
+            "durationMs": 1200,
+        },
+        # 收尾得有一句回答：只有工具调用的话，这一轮会被判成「模型没有说什么」
+        {"type": "message_update", "assistantMessageEvent": {"type": "text_delta", "delta": "跑完了"}},
+        {"type": "agent_end"},
+    ]
+    events = _stream_from_records(tmp_path, records, monkeypatch)
+
+    kinds = [item["type"] for item in events]
+    assert kinds == ["call", "progress", "result", "text", "reply"], kinds
+    progress = events[1]
+    assert progress["id"] == "c1"
+    assert "第 1 行" in progress["text"] and "第 3 行" not in progress["text"]
 
 
 def test_tool_markup_never_reaches_the_page() -> None:

@@ -317,6 +317,10 @@ button{font:inherit;color:inherit;background:none;border:0;cursor:pointer}
 
 .stamp{align-self:center;font-size:11px;color:var(--faint);margin:2px 0}
 .tool{border-radius:8px;padding:0}
+/* 正在跑：左边一道很淡的竖线，不加动画。动起来的东西说明它在动，
+   但这不是给眼睛看的烟花——内容本身才是。 */
+.tool.live{padding-left:7px;border-left:2px solid var(--accent-soft)}
+.tool.live .tb{color:var(--ink2)}
 .tool summary{display:flex;align-items:center;gap:6px;list-style:none;cursor:pointer;
   font:11.5px/20px var(--mono);color:var(--ink2);min-width:0}
 .tool summary::-webkit-details-marker{display:none}
