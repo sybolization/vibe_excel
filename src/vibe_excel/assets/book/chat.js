@@ -332,6 +332,9 @@
     syncSend();
   });
   input.addEventListener("keydown", (e) => {
+    /* 中文输入法里，回车是「确认候选词」，不是「发送」。
+       不挡这一下，一句话会被发两遍——第二遍还是同样的文字。 */
+    if (e.isComposing === true || e.keyCode === 229) return;
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
       send();

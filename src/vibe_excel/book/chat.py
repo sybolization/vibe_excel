@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -138,6 +139,19 @@ _HISTORY_CHARS = 6000
 _MESSAGE_CHARS = 2000
 
 
+# 模型偶尔会把「本来要调工具」的标记当正文吐出来（<|DSML|> 那一套）。
+# 页面上不该出现这种东西，落盘也不该。
+_TOOL_MARKUP = re.compile(r"<\|\s*DSML\s*\|>|<\|\s*/?\s*DSML|<dsml", re.IGNORECASE)
+
+
+def strip_tool_markup(text: str) -> str:
+    """把误吐出来的工具调用标记连同它后面的内容一起切掉。"""
+    match = _TOOL_MARKUP.search(text)
+    if match is None:
+        return text
+    return text[: match.start()].rstrip()
+
+
 def _timestamp() -> str:
     return datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
 
@@ -251,6 +265,8 @@ def system_prompt(
         f"你在 vibe_excel 的构建页面里回答问题，当前项目是「{program}」。",
         "这个项目把 Excel 表物化成表，再经过若干步骤产出结果表；页面能看运行、输入和对话。",
         "回答用中文，直接说结论，不要复述用户的提问，也不要编造没看到的数据。",
+        "你没有工具可用：不能读文件、不能跑命令、不能查数据库。"
+        "只能用下面给的项目事实回答；缺什么就直接说缺什么，不要假装调用工具。",
     ]
     facts = context or {}
     files = [str(item) for item in facts.get("files") or []]
@@ -258,6 +274,14 @@ def system_prompt(
     outputs = [str(item) for item in facts.get("outputs") or []]
     if files:
         lines.append("输入文件：" + "、".join(files))
+    tables = [item for item in facts.get("tables") or [] if isinstance(item, dict)]
+    if tables:
+        lines.append("项目里的表（表名：行数 × 列数）：")
+        for item in tables[:20]:
+            rows = item.get("rows")
+            columns = item.get("columns")
+            size = "" if rows is None or columns is None else f"{rows} 行 × {columns} 列"
+            lines.append(f"- {item.get('name')}：{size}")
     if steps:
         lines.append("处理步骤（函数：读 → 写）：")
         for step in steps[:12]:
@@ -355,6 +379,8 @@ def stream_events(config: ChatConfig, messages: list[dict[str, str]]) -> Iterato
     )
     think_parts: list[str] = []
     text_parts: list[str] = []
+    held = ""      # 可能落在标记中间的那一截尾巴：先扣着，确认不是标记再发
+    leaked = False
     try:
         assert process.stdout is not None
         for line in process.stdout:
@@ -378,13 +404,31 @@ def stream_events(config: ChatConfig, messages: list[dict[str, str]]) -> Iterato
                 think_parts.append(delta)
                 yield {"type": "thinking", "delta": delta}
             elif kind == "text_delta":
-                text_parts.append(delta)
-                yield {"type": "text", "delta": delta}
+                if leaked:
+                    continue
+                held += delta
+                # 从最后一个 "<" 之后切开：标记可能刚写了一半
+                cut = held.rfind("<")
+                safe = held if cut < 0 else held[:cut]
+                held = "" if cut < 0 else held[cut:]
+                if _TOOL_MARKUP.search(safe + held) is not None:
+                    safe = strip_tool_markup(safe + held)
+                    held = ""
+                    leaked = True
+                if safe:
+                    text_parts.append(safe)
+                    yield {"type": "text", "delta": safe}
     finally:
         try:
             process.wait(timeout=10)
         except subprocess.TimeoutExpired:
             process.kill()
+    if held and _TOOL_MARKUP.search(held) is not None:
+        held = strip_tool_markup(held)
+        leaked = True
+    if held:
+        text_parts.append(held)
+        yield {"type": "text", "delta": held}
     answer = "".join(text_parts).strip()
     if process.returncode not in (0, None) and answer == "":
         detail = ""
@@ -392,6 +436,8 @@ def stream_events(config: ChatConfig, messages: list[dict[str, str]]) -> Iterato
             detail = process.stderr.read().strip()[:200]
         raise VibeError(f"模型没有回答：{detail or f'退出码 {process.returncode}'}")
     if answer == "":
+        if leaked:
+            raise VibeError("模型想调用工具，但这里没有工具可用；换个问法或把要看的东西说清")
         raise VibeError("模型没有说什么")
     yield {"type": "reply", "text": answer, "thinking": "".join(think_parts).strip()}
 

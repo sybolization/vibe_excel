@@ -21,6 +21,7 @@ from vibe_excel.book.chat import (
     probe,
     read_messages,
     send,
+    strip_tool_markup,
     system_prompt,
 )
 from vibe_excel.util import VibeError
@@ -234,6 +235,20 @@ def test_probe_asks_for_the_key_only_when_remote(monkeypatch: pytest.MonkeyPatch
         key_env="NOPE_KEY", timeout_ms=1000, cli="",
     )
     assert probe(local) == (True, "")
+
+
+def test_tool_markup_never_reaches_the_page() -> None:
+    # 模型偶尔把「本来要调工具」的标记当正文吐出来：这类内容不进页面，也不落盘
+    raw = "这次流程涉及三张表。\n<|DSML|> calls>\n<|DSML|> invoke name=\"bash\">"
+
+    assert strip_tool_markup(raw) == "这次流程涉及三张表。"
+    assert strip_tool_markup("没有问题的一段回答") == "没有问题的一段回答"
+
+
+def test_system_prompt_says_there_are_no_tools() -> None:
+    prompt = system_prompt(PROGRAM, [])
+
+    assert "没有工具可用" in prompt
 
 
 def test_system_prompt_lists_recent_input_changes() -> None:

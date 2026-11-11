@@ -160,7 +160,18 @@ def _chat_context(store: Path, program_id: str) -> dict[str, object]:
         {"fn": node.get("fn"), "reads": node.get("reads") or [], "writes": node.get("writes") or []}
         for node in graph.get("nodes") or []
     ]
-    return {"files": files, "steps": steps, "outputs": graph.get("outputs") or []}
+    diagram = cast("Mapping[str, Any]", view.get("diagram") or {})
+    # 页面上有的表，模型也该看得到——不然它只能要求去查库
+    tables = [
+        {
+            "name": node.get("label"),
+            "rows": node.get("rows"),
+            "columns": node.get("columns"),
+        }
+        for node in diagram.get("nodes") or []
+        if isinstance(node, dict) and node.get("kind") == "table"
+    ]
+    return {"files": files, "steps": steps, "tables": tables, "outputs": graph.get("outputs") or []}
 
 
 def _rebuild_batch() -> dict[str, object]:
