@@ -147,6 +147,14 @@ button{font:inherit;color:inherit;background:none;border:0;cursor:pointer}
 .grow{margin-left:auto}
 .btn{height:28px;padding:0 12px;border-radius:8px;font-size:12.5px;font-weight:500;color:var(--ink2);background:var(--fill)}
 .btn.off{background:var(--fill);color:var(--faint)}
+/* 顶栏只有一个图标按钮，所以只做最小的一套：28 见方、无边框、悬停才出底色。 */
+.iconbtn{width:28px;height:28px;display:grid;place-items:center;border-radius:8px;color:var(--ink2)}
+.iconbtn:hover{background:var(--fill);color:var(--ink)}
+.iconbtn svg{display:block}
+/* 图标表示「点下去会变成什么」：浅色下显示月亮，深色下显示太阳 */
+.iconbtn .i-sun{display:none}
+:root[data-theme="dark"] .iconbtn .i-sun{display:block}
+:root[data-theme="dark"] .iconbtn .i-moon{display:none}
 
 /* ---------- 左侧托盘：标准材质，不是玻璃（下面没有内容可透） ---------- */
 .tray{position:fixed;z-index:30;left:12px;top:68px;width:236px;border-radius:16px;padding:7px;

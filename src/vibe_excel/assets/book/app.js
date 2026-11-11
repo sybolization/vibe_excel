@@ -12,9 +12,33 @@
   const I = V.inputs;
   const q = new URLSearchParams(location.search);
   /* 主题：?t= 显式指定则听它；否则跟随系统。默认浅色。 */
-  const forcedTheme = q.get("t");
+  const THEME_KEY = "vibe-book-theme";
+  const readTheme = () => {
+    try {
+      return localStorage.getItem(THEME_KEY);
+    } catch {
+      // file:// 或隐私模式下存储可能被禁；读不到就当没存过
+      return null;
+    }
+  };
+  const storeTheme = (value) => {
+    try {
+      localStorage.setItem(THEME_KEY, value);
+    } catch {
+      // 存不下不影响本次使用，主题只活在这个页面里
+    }
+  };
+  const applyTheme = (value) => {
+    document.documentElement.dataset.theme = value === "dark" ? "dark" : "light";
+  };
   const prefersDark = window.matchMedia !== undefined && window.matchMedia("(prefers-color-scheme: dark)").matches;
-  document.documentElement.dataset.theme = forcedTheme === "dark" || (forcedTheme === null && prefersDark) ? "dark" : "light";
+  /* 优先级：显式 ?t= > 上次手动选的 > 系统偏好。默认浅色。 */
+  applyTheme(q.get("t") ?? readTheme() ?? (prefersDark ? "dark" : "light"));
+  const toggleTheme = () => {
+    const next = document.documentElement.dataset.theme === "dark" ? "light" : "dark";
+    applyTheme(next);
+    storeTheme(next);
+  };
 
   const esc = (v) => String(v ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
   const num = (n) => (n === null || n === undefined ? "—" : Number(n).toLocaleString("en-US"));
@@ -355,6 +379,10 @@
     ${same || V.lastRunRevision === null ? "" : '<span class="chip note">数据已更新</span>'}
     <span class="rev">${V.revisions.length} 个数据版本 · ${V.runs.length} 次运行</span>
     <span class="grow"></span>
+    <button class="iconbtn" data-act="theme" title="切换深色 / 浅色" aria-label="切换深色 / 浅色">
+      <svg class="i-moon" viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M13.4 9.8A5.7 5.7 0 0 1 6.2 2.6a5.7 5.7 0 1 0 7.2 7.2z"/></svg>
+      <svg class="i-sun" viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><circle cx="8" cy="8" r="3"/><path d="M8 1.5v1.6M8 12.9v1.6M1.5 8h1.6M12.9 8h1.6M3.4 3.4l1.1 1.1M11.5 11.5l1.1 1.1M12.6 3.4l-1.1 1.1M4.5 11.5l-1.1 1.1"/></svg>
+    </button>
     <button class="btn off" disabled>发布</button>`;
 
   /* ---------- 左侧托盘 ---------- */
@@ -681,6 +709,13 @@ if (location.search.includes("selftest")) {
     grip.dispatchEvent(new PointerEvent("pointerup", { bubbles: true, pointerId: 3, isPrimary: true, clientX: gr.left + 4 - 80, clientY: gr.top + 40 }));
     out.push(`dragw=${st().width}`);
 
+    /* 主题开关：点一下要真的翻转，图标跟着换 */
+    const themeBtn = pick('.iconbtn[data-act="theme"]');
+    const themeBefore = document.documentElement.dataset.theme;
+    themeBtn.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    out.push(`theme=${themeBefore}->${document.documentElement.dataset.theme}`);
+    out.push(`themeIcon=${getComputedStyle(themeBtn.querySelector(".i-moon")).display === "none" ? "sun" : "moon"}`);
+
     const box = document.createElement("div");
     box.id = "selftest";
     box.textContent = "RESULT " + out.join(" | ");
@@ -716,6 +751,10 @@ if (location.search.includes("selftest")) {
   });
 
   root.addEventListener("click", (e) => {
+    if (e.target.closest('[data-act="theme"]') !== null) {
+      toggleTheme();
+      return;
+    }
     const row = e.target.closest("[data-f]");
     if (row !== null) {
       select(Number(row.getAttribute("data-f")), true);
