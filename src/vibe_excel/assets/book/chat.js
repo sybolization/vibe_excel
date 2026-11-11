@@ -395,6 +395,7 @@
     /* 两块现场长出来：思考（默认折叠）与回答（逐字填）。 */
     const thought = { kind: "thinking", at, text: "", live: true };
     const answer = { kind: "assistant", at, text: "" };
+    const calls = new Map();
     thread.blocks.push(thought, answer);
     state.sending = true;
     paint();
@@ -473,7 +474,23 @@
           if (line === "") continue;
           let event = null;
           try { event = JSON.parse(line); } catch { continue; }
-          if (event.type === "thinking") {
+          if (event.type === "call") {
+            /* 工具调用真的发生了，就当场长出一行——它干了什么，不该等回答完才知道 */
+            const block = { kind: "tool", at, name: event.name ?? "?", brief: event.brief ?? "", ok: true, result: "", ms: null };
+            calls.set(String(event.id ?? ""), block);
+            thread.blocks.splice(thread.blocks.indexOf(answer), 0, block);
+            settleThought();
+            paint();
+          } else if (event.type === "result") {
+            const block = calls.get(String(event.id ?? ""));
+            if (block !== undefined) {
+              block.ok = String(event.ok ?? "1") !== "0";
+              block.result = event.text ?? "";
+              const ms = Number(event.ms);
+              block.ms = Number.isFinite(ms) ? ms : null;
+              paint();
+            }
+          } else if (event.type === "thinking") {
             thought.text += event.delta;
             repaint();
           } else if (event.type === "text") {

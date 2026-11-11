@@ -245,10 +245,14 @@ def test_tool_markup_never_reaches_the_page() -> None:
     assert strip_tool_markup("没有问题的一段回答") == "没有问题的一段回答"
 
 
-def test_system_prompt_says_there_are_no_tools() -> None:
-    prompt = system_prompt(PROGRAM, [])
+def test_system_prompt_tells_it_where_it_works() -> None:
+    prompt = system_prompt(PROGRAM, [], workspace=Path("C:/data/项目"))
 
-    assert "没有工具可用" in prompt
+    # 它是有工具的：得知道自己的工作目录在哪，也要知道长命令不该干等
+    assert "C:" in prompt and "工作目录" in prompt
+    assert "超过 15 秒" in prompt
+    # 之前那套「你没有工具可用」必须彻底消失，否则它又会把工具调用写成正文
+    assert "没有工具可用" not in prompt
 
 
 def test_system_prompt_lists_recent_input_changes() -> None:

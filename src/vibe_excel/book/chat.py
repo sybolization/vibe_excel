@@ -181,6 +181,51 @@ def pick_conversation(directory: Path, conversation_id: str | None) -> Path:
     return directory / f"{stamp}_chat.jsonl"
 
 
+def append_record(path: Path, record: dict[str, Any]) -> None:
+    """追加一条 pi 形状的记录。"""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with _WRITE_LOCK, path.open("a", encoding="utf-8", newline="\n") as handle:
+        handle.write(json.dumps(record, ensure_ascii=False) + "\n")
+
+
+def append_tool_call(path: Path, call: dict[str, Any]) -> None:
+    """一轮里的工具调用与结果：分两条记录，页面才排得出「先调用、再结果」。"""
+    call_id = str(call.get("id") or "")
+    append_record(
+        path,
+        {
+            "type": "message",
+            "timestamp": _timestamp(),
+            "message": {
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "toolCall",
+                        "id": call_id,
+                        "name": str(call.get("name") or "?"),
+                        "arguments": call.get("args") if isinstance(call.get("args"), dict) else {},
+                    }
+                ],
+            },
+        },
+    )
+    append_record(
+        path,
+        {
+            "type": "message",
+            "timestamp": _timestamp(),
+            "message": {
+                "role": "toolResult",
+                "toolCallId": call_id,
+                "toolName": str(call.get("name") or "?"),
+                "isError": call.get("ok") is not True,
+                "durationMs": call.get("ms"),
+                "content": [{"type": "text", "text": str(call.get("result") or "")}],
+            },
+        },
+    )
+
+
 def append_message(path: Path, role: str, text: str, *, thinking: str = "") -> None:
     """按 pi 的记录格式追加一条消息；一份文件就是一段对话。
 
@@ -259,14 +304,17 @@ def system_prompt(
     program: str,
     events: Sequence[dict[str, Any]],
     context: dict[str, Any] | None = None,
+    workspace: Path | None = None,
 ) -> str:
     """把页面知道的事实先交代清楚，省得每句话都要人重复。"""
     lines = [
         f"你在 vibe_excel 的构建页面里回答问题，当前项目是「{program}」。",
+        f"工作目录：{workspace}。" if workspace is not None else "",
         "这个项目把 Excel 表物化成表，再经过若干步骤产出结果表；页面能看运行、输入和对话。",
         "回答用中文，直接说结论，不要复述用户的提问，也不要编造没看到的数据。",
-        "你没有工具可用：不能读文件、不能跑命令、不能查数据库。"
-        "只能用下面给的项目事实回答；缺什么就直接说缺什么，不要假装调用工具。",
+        f"工作目录是 {workspace}，你可以用工具读文件、跑命令、查数据库来把问题弄明白；"
+        "只在这个工作区里读写，不要动别处的文件。",
+        "超过 15 秒的命令不要干等：先把它送进后台，拿到 job 后再继续，结果回来时我会再叫你。",
     ]
     facts = context or {}
     files = [str(item) for item in facts.get("files") or []]
@@ -312,6 +360,35 @@ def _flatten(messages: list[dict[str, str]]) -> tuple[str, str]:
     return system, "\n\n".join(turns)
 
 
+def _tool_brief(arguments: object) -> str:
+    """工具行上那一句：命令就写命令，其它写第一个参数。"""
+    if not isinstance(arguments, dict):
+        return ""
+    for key in ("command", "path", "file", "pattern", "query"):
+        value = arguments.get(key)
+        if isinstance(value, str) and value.strip():
+            return " ".join(value.split())[:160]
+    first = next((value for value in arguments.values() if isinstance(value, str)), "")
+    return " ".join(str(first).split())[:160]
+
+
+def _tool_text(result: object) -> tuple[str, bool]:
+    """把 pi 的工具结果摊成 (文本, 是否失败)。"""
+    if not isinstance(result, dict):
+        return "", False
+    parts = result.get("content")
+    chunks: list[str] = []
+    if isinstance(parts, list):
+        for raw in parts:
+            item = raw if isinstance(raw, dict) else {}
+            text = item.get("text")
+            if isinstance(text, str):
+                chunks.append(text)
+    structured = result.get("structuredContent")
+    failed = isinstance(structured, dict) and str(structured.get("exit_code", 0)) not in ("0", "None")
+    return "\n".join(chunks).strip(), bool(failed)
+
+
 def ask_pi(config: ChatConfig, messages: list[dict[str, str]]) -> str:
     """借 pi 的 CLI 问一次：走的是和 DSH 同一个网关与鉴权，不用自己拼请求。"""
     system, prompt = _flatten(messages)
@@ -341,8 +418,13 @@ def ask_pi(config: ChatConfig, messages: list[dict[str, str]]) -> str:
     return text
 
 
+# 对话里的它就是干活的：读文件、跑命令、写 Python 查库都在这一套里
+CHAT_TOOLS = "read,bash,powershell,edit,write,grep,find,ls"
+
+
 def _pi_argv(config: ChatConfig, system: str, prompt: str, *, mode: str) -> list[str]:
-    argv = [*_pi_command(Path(config.cli)), "-p", "--no-session", "--no-tools"]
+    argv = [*_pi_command(Path(config.cli)), "-p", "--no-session"]
+    argv += ["--tools", CHAT_TOOLS]
     argv += ["--provider", config.provider, "--model", config.model, "--mode", mode]
     if system:
         argv += ["--system-prompt", system]
@@ -350,7 +432,12 @@ def _pi_argv(config: ChatConfig, system: str, prompt: str, *, mode: str) -> list
     return argv
 
 
-def stream_events(config: ChatConfig, messages: list[dict[str, str]]) -> Iterator[dict[str, str]]:
+def stream_events(
+    config: ChatConfig,
+    messages: list[dict[str, str]],
+    *,
+    workspace: Path | None = None,
+) -> Iterator[dict[str, str]]:
     """边跑边吐增量：thinking 一段、text 一段，最后一条是 reply。
 
     页面要的是「分块、可展开的思考」和「逐字出现的回答」，所以不能等整段跑完再返回。
@@ -376,9 +463,11 @@ def stream_events(config: ChatConfig, messages: list[dict[str, str]]) -> Iterato
         errors="replace",
         bufsize=1,
         env={**os.environ},
+        cwd=str(workspace) if workspace is not None else None,
     )
     think_parts: list[str] = []
     text_parts: list[str] = []
+    calls: list[dict[str, object]] = []
     held = ""      # 可能落在标记中间的那一截尾巴：先扣着，确认不是标记再发
     leaked = False
     try:
@@ -391,7 +480,41 @@ def stream_events(config: ChatConfig, messages: list[dict[str, str]]) -> Iterato
                 record = json.loads(trimmed)
             except json.JSONDecodeError:
                 continue
-            if not isinstance(record, dict) or record.get("type") != "message_update":
+            if not isinstance(record, dict):
+                continue
+            kind_outer = record.get("type")
+            if kind_outer == "tool_execution_start":
+                call_id = str(record.get("toolCallId") or "")
+                name = str(record.get("toolName") or "?")
+                brief = _tool_brief(record.get("args"))
+                calls.append(
+                    {
+                        "id": call_id, "name": name, "brief": brief,
+                        "args": record.get("args"), "ok": True, "result": "", "ms": None,
+                    }
+                )
+                yield {"type": "call", "id": call_id, "name": name, "brief": brief}
+                continue
+            if kind_outer == "tool_execution_end":
+                call_id = str(record.get("toolCallId") or "")
+                text_out, failed = _tool_text(record.get("result"))
+                failed = failed or record.get("isError") is True
+                duration = record.get("durationMs")
+                ms = int(duration) if isinstance(duration, (int, float)) else None
+                for item in calls:
+                    if item["id"] == call_id:
+                        item["ok"] = not failed
+                        item["result"] = text_out
+                        item["ms"] = ms
+                yield {
+                    "type": "result",
+                    "id": call_id,
+                    "ok": "0" if failed else "1",
+                    "text": text_out[:2000],
+                    "ms": "" if ms is None else str(ms),
+                }
+                continue
+            if kind_outer != "message_update":
                 continue
             event = record.get("assistantMessageEvent")
             if not isinstance(event, dict):
@@ -437,9 +560,14 @@ def stream_events(config: ChatConfig, messages: list[dict[str, str]]) -> Iterato
         raise VibeError(f"模型没有回答：{detail or f'退出码 {process.returncode}'}")
     if answer == "":
         if leaked:
-            raise VibeError("模型想调用工具，但这里没有工具可用；换个问法或把要看的东西说清")
+            raise VibeError("模型把工具调用写成了正文，这一轮没有回答；换个问法再试")
         raise VibeError("模型没有说什么")
-    yield {"type": "reply", "text": answer, "thinking": "".join(think_parts).strip()}
+    yield {
+        "type": "reply",
+        "text": answer,
+        "thinking": "".join(think_parts).strip(),
+        "calls": json.dumps(calls, ensure_ascii=False),
+    }
 
 
 def ask(config: ChatConfig, messages: list[dict[str, str]]) -> str:
@@ -499,20 +627,33 @@ def send_stream(
     path = pick_conversation(directory, None if new else conversation_id)
     append_message(path, "user", clean)
     history = read_messages(path)
-    messages = [{"role": "system", "content": system_prompt(program, events, context)}, *history]
+    prompt = system_prompt(program, events, context, workspace=store)
+    messages = [{"role": "system", "content": prompt}, *history]
     thinking = ""
     answer = ""
+    calls: list[dict[str, Any]] = []
     try:
-        for event in stream_events(ChatConfig.from_env(), messages):
+        for event in stream_events(ChatConfig.from_env(), messages, workspace=store):
             if event.get("type") == "reply":
                 answer = event.get("text", "")
                 thinking = event.get("thinking", "")
+                raw_calls = event.get("calls")
+                if isinstance(raw_calls, str) and raw_calls:
+                    parsed = json.loads(raw_calls)
+                    if isinstance(parsed, list):
+                        calls = [item for item in parsed if isinstance(item, dict)]
                 continue
             yield event
     except VibeError as error:
         yield {"type": "error", "error": str(error)}
         return
-    append_message(path, "assistant", answer, thinking=thinking)
+    # 按发生的顺序落盘：思考 → 每次工具调用与结果 → 最后那段回答
+    if thinking:
+        append_message(path, "assistant", "", thinking=thinking)
+    for call in calls:
+        append_tool_call(path, call)
+    if answer:
+        append_message(path, "assistant", answer)
     yield {"type": "done", "conversationId": path.stem, "reply": answer}
 
 
