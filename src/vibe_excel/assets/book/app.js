@@ -819,8 +819,16 @@ if (location.search.includes("selftest")) {
   const applyState = (state) => {
     if (state === undefined || state === null) return;
     RT.inputs = state;
+    const el = document.getElementById("book-runtime");
+    if (el !== null) {
+      // 对话区读的是这份运行态：写回去，移出/撤回的事件才留得住
+      try { el.textContent = JSON.stringify({ ...RT, inputs: state }); } catch { /* 序列化失败就别动它 */ }
+    }
     paintTray();
     paintStale();
+    if (typeof window.__CHAT === "object" && window.__CHAT !== null && typeof window.__CHAT.refresh === "function") {
+      window.__CHAT.refresh();
+    }
   };
   const note = (text, tone) => {
     const el = document.getElementById("toast");
@@ -889,7 +897,6 @@ if (location.search.includes("selftest")) {
       <div class="ask-h">移出输入</div>
       <div class="ask-b">${esc(name)}</div>
       ${file === null ? "" : `<div class="ask-n">它物化出 ${tables.length} 张表；移出后这些链路会标记为不可用，下次重建批次才生效。</div>`}
-      <textarea class="ask-r" rows="2" placeholder="为什么移出（可留空）"></textarea>
       <div class="ask-f"><button class="tbtn" data-ask="cancel">取消</button><button class="tbtn go" data-ask="ok">移出</button></div>
       <div class="ask-e"></div>`;
     document.body.appendChild(box);
@@ -900,7 +907,6 @@ if (location.search.includes("selftest")) {
     const top = Math.min(Math.max(12, r.top - 6), Math.max(12, window.innerHeight - size.height - 12));
     box.style.left = `${left}px`;
     box.style.top = `${top}px`;
-    box.querySelector(".ask-r").focus();
     asking = box;
     box.querySelector('[data-ask="cancel"]').addEventListener("click", closeAsk);
     box.querySelector('[data-ask="ok"]').addEventListener("click", async (event) => {
@@ -910,15 +916,11 @@ if (location.search.includes("selftest")) {
       try {
         const data = await postJson("/api/inputs/delete", {
           name,
-          reason: box.querySelector(".ask-r").value,
           tables: tables.map((r2) => ({ name: r2.name, sheet: r2.sheet })),
         });
         closeAsk();
         applyState(data.state);
         note(`已移出 ${name}`);
-        if (typeof window.__PUSH_EVENT === "function") {
-          window.__PUSH_EVENT(`已移出 ${name}${data.event && data.event.reason ? ` · ${data.event.reason}` : ""}`);
-        }
       } catch (error) {
         box.querySelector(".ask-e").textContent = error.message;
         button.disabled = false;

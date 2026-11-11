@@ -441,3 +441,7 @@ button{font:inherit;color:inherit;background:none;border:0;cursor:pointer}
 .warn-grip{position:absolute;top:0;right:0;bottom:0;width:7px;cursor:ew-resize;
   border-radius:0 14px 14px 0}
 .warn-grip:hover{background:var(--accent-soft)}
+
+/* 对话区顶部的「输入变更」：服务端事件流水的投影 */
+.evsec{display:flex;flex-direction:column;gap:5px;padding:12px 14px 4px}
+.evhd{font-size:11px;color:var(--faint);letter-spacing:.02em}

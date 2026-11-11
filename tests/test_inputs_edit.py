@@ -142,7 +142,6 @@ def test_remove_moves_to_trash_writes_packet_and_event(
         ground,
         store,
         "orders.xlsx",
-        reason="导出表换了结构",
         tables=[{"sheet": "Orders", "table": "raw_orders"}],
     )
 
@@ -150,7 +149,8 @@ def test_remove_moves_to_trash_writes_packet_and_event(
     bucket = Path(str(event["trash"]))
     assert (bucket / "orders.xlsx").is_file()
     packet = json.loads((bucket / PACKET_NAME).read_text(encoding="utf-8"))
-    assert packet["reason"] == "导出表换了结构"
+    # 界面不再向用户要理由，包里也就不留一个永远为空的字段
+    assert "reason" not in packet
     assert packet["tables"] == [{"sheet": "Orders", "table": "raw_orders"}]
     # 清单里也要摘掉
     assert "orders.xlsx" not in (tmp_path / "vibe.plugins.yml").read_text(encoding="utf-8")
@@ -190,7 +190,7 @@ def test_promote_trash_moves_packets_to_archive(
 ) -> None:
     _, store = _case(tmp_path, monkeypatch)
     ground = resolve_ground_truth(tmp_path / "vibe.plugins.yml")
-    remove_file(ground, store, "orders.xlsx", reason="换了一份导出")
+    remove_file(ground, store, "orders.xlsx")
 
     moved = promote_trash(store)
 
@@ -205,7 +205,7 @@ def test_promote_skips_undone_removals(
 ) -> None:
     _, store = _case(tmp_path, monkeypatch)
     ground = resolve_ground_truth(tmp_path / "vibe.plugins.yml")
-    remove_file(ground, store, "orders.xlsx", reason="手滑")
+    remove_file(ground, store, "orders.xlsx")
     undo_removal(ground, store)
 
     # 撤回过的移出不该被当成历史输入归档，否则包里会留下一条「已移出」的假记录

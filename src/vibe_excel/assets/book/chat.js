@@ -164,10 +164,35 @@
     return `<details class="blk tool"><summary><span class="tn">${esc(b.name)}</span><span class="tb" title="${esc(b.brief)}">${esc(b.brief)}</span><span class="tok ${b.ok ? "ok" : "err"}">${mark}</span></summary>${b.result === "" ? "" : `<pre>${esc(b.result)}</pre>`}</details>`;
   }
 
+  /* 服务端记在 store 里的输入变更事件：读页面的运行态，不靠这次会话的记忆。
+     移出过的文件在刷新之后仍然看得见——历史不能因为关了页面就消失。 */
+  const eventsHtml = () => {
+    const el = document.getElementById("book-runtime");
+    if (el === null) return "";
+    let runtime = null;
+    try { runtime = JSON.parse(el.textContent); } catch { return ""; }
+    const rows = runtime && runtime.inputs && runtime.inputs.events ? runtime.inputs.events : [];
+    if (!Array.isArray(rows) || rows.length === 0) return "";
+    const items = rows
+      .slice()
+      .reverse()
+      .map((e) => {
+        const at = new Date(e.at);
+        const hh = Number.isNaN(at.getTime())
+          ? ""
+          : `${String(at.getHours()).padStart(2, "0")}:${String(at.getMinutes()).padStart(2, "0")} `;
+        const verb = e.kind === "remove" ? "移出" : e.kind === "undo" ? "撤回" : String(e.kind ?? "");
+        return `<div class="blk ev"><span class="evd"></span><span class="evt">${esc(hh)}${esc(verb)} ${esc(e.file ?? "")}</span></div>`;
+      })
+      .join("");
+    return `<div class="evsec"><div class="evhd">输入变更</div>${items}</div>`;
+  };
+
   function paintThread() {
     const conv = current();
     if (conv === null) {
-      body.innerHTML = `<div class="empty">还没有对话</div>`;
+      // 没有对话时也要露出输入变更：这个项目的输入被动过，比"还没有对话"更该被看见
+      body.innerHTML = eventsHtml() + `<div class="empty">还没有对话</div>`;
       return;
     }
     title.textContent = cleanTitle(conv.title);
@@ -183,13 +208,14 @@
           last = at;
         }
         if (b.kind === "tool") return stamp + toolBlock(b);
-        /* 输入变更这类系统事件：不冒充 agent 说的话，单独一种行。 */
+  /* 输入变更这类系统事件：不冒充 agent 说的话，单独一种行。 */
         if (b.kind === "event") return stamp + `<div class="blk ev"><span class="evd"></span><span class="evt">${esc(b.text)}</span></div>`;
         if (b.kind === "user") return `${stamp}<div class="blk u"><div class="who">你</div><div class="body">${esc(b.text).replace(/\n/g, "<br>")}</div></div>`;
         return `${stamp}<div class="blk a"><div class="who">agent</div><div class="body md">${renderMd(b.text)}</div></div>`;
       })
       .join("");
-    body.innerHTML = html === "" ? `<div class="empty">这段对话没有消息</div>` : html;
+    body.innerHTML =
+      eventsHtml() + (html === "" ? `<div class="empty">这段对话没有消息</div>` : html);
 
     /* 超过 12 行折叠 */
     for (const el of body.querySelectorAll(".blk .body")) {
@@ -310,20 +336,6 @@
     }
   }
 
-  /* 页面上的动作（例如移出输入）要能在对话里留下一条系统行 */
-  window.__PUSH_EVENT = (text) => {
-    if (typeof text !== "string" || text === "") return;
-    if (state.draft === null) {
-      state.draft = { id: "draft", title: "输入变更", start: "", end: "", blocks: [] };
-    }
-    state.draft.blocks.push({ kind: "event", at: new Date().toISOString(), text });
-    paint();
-    if (!state.open) {
-      state.unread = true;
-      paintRail();
-    }
-  };
-
   /* 引用选中的节点 */
   let quoted = null;
   window.__ON_SELECT = (node) => {
@@ -349,6 +361,10 @@
     open() {
       state.open = true;
       applyLayout();
+      paint();
+    },
+    /* 页面上的动作（移出/撤回）之后让对话区重新读一遍运行态 */
+    refresh() {
       paint();
     },
   };

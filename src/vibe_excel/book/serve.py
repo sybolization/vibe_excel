@@ -251,7 +251,6 @@ class _Handler(BaseHTTPRequestHandler):
                 ground,
                 store,
                 str(payload.get("name") or ""),
-                reason=str(payload.get("reason") or ""),
                 tables=payload.get("tables") or [],
                 chain=payload.get("chain") or {},
             )

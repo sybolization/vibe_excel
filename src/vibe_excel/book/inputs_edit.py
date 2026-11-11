@@ -261,7 +261,6 @@ def remove_file(
     store: Path,
     name: str,
     *,
-    reason: str = "",
     tables: list[dict[str, object]] | None = None,
     chain: dict[str, object] | None = None,
 ) -> dict[str, object]:
@@ -284,7 +283,6 @@ def remove_file(
         "file": clean,
         "bytes": (bucket / clean).stat().st_size if moved else 0,
         "sha256": _sha256(bucket / clean) if moved else "",
-        "reason": reason,
         "manifest": str(ground_truth.manifest),
         "groundTruth": str(ground_truth.directory),
         "archivedAt": str(bucket),
@@ -306,7 +304,6 @@ def remove_file(
         "kind": "remove",
         "at": payload["at"],
         "file": clean,
-        "reason": reason,
         "trash": str(bucket),
         "packet": str(bucket / PACKET_NAME),
         "manifest": str(ground_truth.manifest),
