@@ -35,6 +35,10 @@ def main(argv: list[str]) -> int:
         return 2
     command = argv[1]
     here = Path(__file__).resolve().parent
+    # 子进程的 PATH 里先放「当前这个解释器」的目录：不这么写，脱离出去以后
+    # 它可能根本找不到 python（服务进程的 PATH 和你的 shell 未必一样）
+    env = dict(os.environ)
+    env["PATH"] = str(Path(sys.executable).parent) + os.pathsep + env.get("PATH", "")
     job = _next_job(here / "jobs")
     log = job / "out.log"
     workdir = str(here.parent)
@@ -57,6 +61,7 @@ def main(argv: list[str]) -> int:
             ["cmd", "/c", str(script)],
             creationflags=flags,
             cwd=workdir,
+            env=env,
             close_fds=True,
         )
     else:
@@ -67,6 +72,7 @@ def main(argv: list[str]) -> int:
             ["/bin/sh", str(script)],
             start_new_session=True,
             cwd=workdir,
+            env=env,
         )
 
     print(f"job {job.name}")
