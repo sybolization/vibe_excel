@@ -447,3 +447,6 @@ button{font:inherit;color:inherit;background:none;border:0;cursor:pointer}
 /* 对话区顶部的「输入变更」：服务端事件流水的投影 */
 .evsec{display:flex;flex-direction:column;gap:5px;padding:12px 14px 4px}
 .evhd{font-size:11px;color:var(--faint);letter-spacing:.02em}
+
+/* 底栏页脚只剩一个按钮：靠右放，别贴在左边显得丢了东西 */
+.bp-ft{justify-content:flex-end}

@@ -8,6 +8,8 @@
   /* 画布只画骨架：文件 → sheet → 机器 → 产物。
      原料表并进它的 sheet（sheet 卡片上多一行「产出：表名」），
      中间产物并成机器→机器的一条边，孤儿表不入图。 */
+  const DIAGRAM = D === null ? { nodes: [], edges: [] } : D;
+  const rawById = new Map((DIAGRAM.nodes ?? []).map((n) => [n.id, n]));
   const R = reduceDiagram(D === null ? { nodes: [], edges: [] } : D);
   const N = R.nodes;
   const E = R.edges;
@@ -560,20 +562,29 @@
         </div>`;
     }
     if (n.kind === "compute") {
+      /* 读写从原图上的边读：本次运行没跑到的步骤不在 G.nodes 里，
+         只查那里面会让「这一步读写了什么」变成两个 0。 */
+      const edgeTables = (edges, side) =>
+        edges
+          .map((e) => rawById.get(e[side]))
+          .filter((x) => x !== undefined && x.kind === "table")
+          .map((x) => x.label);
+      const allEdges = DIAGRAM.edges ?? [];
       const g = G === null ? undefined : G.nodes.find((x) => x.fn === n.label);
-      const reads = g === undefined ? [] : g.reads;
-      const writes = g === undefined ? [] : g.writes;
+      const reads = g === undefined ? edgeTables(allEdges.filter((e) => e.to === n.id && e.kind === "read"), "from") : g.reads;
+      const writes = g === undefined ? edgeTables(allEdges.filter((e) => e.from === n.id && e.kind === "write"), "to") : g.writes;
+      const when = n.run === true ? "在本次运行里跑过" : "不在本次运行里";
       return `
         <div class="pane" style="width:330px;flex:none">
           <div class="selh"><span class="nm">${esc(show(n.label))}</span><span class="st"><span class="idm">${esc(n.label)}</span></span></div>
-          <div class="note">这一步${n.run === true ? "在本次运行里跑过" : "不在本次运行里"} · 耗时 ${dur(n.elapsedMs)}</div>
+          <div class="note">这一步${when} · ${n.run === true ? "耗时" : "上次耗时"} ${dur(n.elapsedMs)}</div>
           <div class="note">${esc(n.file === null ? "没有文件记录" : n.file.split(/[\\/]/).pop())}</div>
         </div>
         <div class="pane grow">
           <div class="ilabel">读<span class="r">${reads.length} 张</span></div>
-          <div class="links2">${reads.map((t) => linkRow(show(t), t)).join("") || '<div class="note">—</div>'}</div>
+          <div class="links2">${reads.map((t) => linkRow(show(t), show(t) === t ? "" : t)).join("") || '<div class="note">—</div>'}</div>
           <div class="ilabel">写<span class="r">${writes.length} 张</span></div>
-          <div class="links2">${writes.map((t) => linkRow(show(t), t)).join("") || '<div class="note">—</div>'}</div>
+          <div class="links2">${writes.map((t) => linkRow(show(t), show(t) === t ? "" : t)).join("") || '<div class="note">—</div>'}</div>
         </div>`;
     }
 
@@ -591,7 +602,7 @@
       </div>
       <div class="pane grow">
         <div class="ilabel">上游<span class="r">${upstream.length} 张</span></div>
-        <div class="links2">${upstream.map((t) => linkRow(show(t), t)).join("") || '<div class="note">—</div>'}</div>
+        <div class="links2">${upstream.map((t) => linkRow(show(t), show(t) === t ? "" : t)).join("") || '<div class="note">—</div>'}</div>
       </div>`;
   }
 
@@ -617,7 +628,7 @@
         <span class="bp-meta">${esc(meta)}</span>
       <button class="bp-fold" title="收起/展开"><svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 7.5 6 4l3.5 3.5"/></svg></button></div>
       ${goneNote}<div class="bp-bd">${selected !== null && selected.kind !== "file" ? nodePane(selected) : f === undefined ? '<div class="pane grow"><div class="note">点画布上的任意一个节点，或者左边的文件</div></div>' : filePane(f)}</div>
-      <div class="bp-ft"><span class="bp-hint">对话在右边</span><button class="btn off" disabled>复制</button></div>`;
+      <div class="bp-ft"><button class="btn off" disabled>复制</button></div>`;
   }
 
   /* ---------- 选中与聚焦 ---------- */
@@ -790,11 +801,16 @@ if (location.search.includes("selftest")) {
     bar.querySelector(".bp-fold").dispatchEvent(new MouseEvent("click", { bubbles: true }));
     out.push(`unfolded=${!bar.classList.contains("folded")}`);
 
-    const file = new File(["x"], "新导入_测试.xlsx", { type: "application/vnd.ms-excel" });
-    const dt = new DataTransfer();
-    dt.items.add(file);
-    tray.dispatchEvent(new DragEvent("drop", { bubbles: true, dataTransfer: dt }));
-    out.push(`imported=${tray.querySelectorAll(".row.local").length}`);
+    /* 服务模式下拖放会真的写盘：自检不该往别人的数据里塞文件，直接跳过。 */
+    if (LIVE) {
+      out.push("imported=skip(live)");
+    } else {
+      const file = new File(["x"], "新导入_测试.xlsx", { type: "application/vnd.ms-excel" });
+      const dt = new DataTransfer();
+      dt.items.add(file);
+      tray.dispatchEvent(new DragEvent("drop", { bubbles: true, dataTransfer: dt }));
+      out.push(`imported=${tray.querySelectorAll(".row.local").length}`);
+    }
 
     /* 字体到底是不是鸿蒙：家族名对不对，以及这个家族能不能画出这几个汉字。
        CJK 的 advance 都是 1em，量宽度分不出家族，只能问 @font-face 本身。 */
@@ -941,7 +957,12 @@ if (location.search.includes("selftest")) {
   tray.addEventListener("drop", (e) => {
     e.preventDefault();
     tray.classList.remove("drop");
-    if (LIVE && e.dataTransfer !== null) upload(e.dataTransfer.files);
+    if (!LIVE) {
+      // 静态页没有后台：不说一句的话，拖进来像是什么都没发生
+      note("导入需要从 start.ps1 启动服务", "bad");
+      return;
+    }
+    if (e.dataTransfer !== null) upload(e.dataTransfer.files);
   });
 
   /* ---------- 移出：贴行确认，绝不替用户按下去 ---------- */
@@ -1185,7 +1206,7 @@ if (location.search.includes("selftest")) {
   select(start < 0 ? 0 : start, q.get("focus") === "1");
   const wanted = q.get("node");
   if (wanted !== null) {
-    const picked = N.find((n) => n.id === wanted);
+    const picked = N.find((n) => n.id === wanted || n.label === wanted);
     if (picked !== undefined) selectNode(picked);
   }
   window.addEventListener("resize", fit);
