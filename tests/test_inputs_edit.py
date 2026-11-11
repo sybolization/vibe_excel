@@ -213,6 +213,20 @@ def test_promote_skips_undone_removals(
     assert not (store / ".archive").exists()
 
 
+def test_last_removal_ignores_promoted_buckets(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _, store = _case(tmp_path, monkeypatch)
+    ground = resolve_ground_truth(tmp_path / "vibe.plugins.yml")
+    remove_file(ground, store, "orders.xlsx")
+    promote_trash(store)
+
+    # 重建批次之后移出桶进了归档：撤回已经不可能，按钮该灰掉
+    assert last_removal(store) is None
+    with pytest.raises(VibeError):
+        undo_removal(ground, store)
+
+
 def test_remove_missing_file_raises(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _, store = _case(tmp_path, monkeypatch)
     ground = resolve_ground_truth(tmp_path / "vibe.plugins.yml")

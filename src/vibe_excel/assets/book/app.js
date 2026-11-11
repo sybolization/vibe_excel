@@ -806,6 +806,10 @@ if (location.search.includes("selftest")) {
 
 
   /* ---------- 与服务的接口 ---------- */
+  const storeOf = () => {
+    const state = ground();
+    return state !== null && typeof state.store === "string" ? state.store : "";
+  };
   const postJson = async (url, payload) => {
     const response = await fetch(url, {
       method: "POST",
@@ -849,7 +853,11 @@ if (location.search.includes("selftest")) {
       try {
         const response = await fetch("/api/inputs/upload", {
           method: "POST",
-          headers: { "Content-Type": "application/octet-stream", "X-Filename": encodeURIComponent(file.name) },
+          headers: {
+            "Content-Type": "application/octet-stream",
+            "X-Filename": encodeURIComponent(file.name),
+            "X-Store": storeOf(),
+          },
           body: await file.arrayBuffer(),
         });
         const data = await response.json();
@@ -919,6 +927,7 @@ if (location.search.includes("selftest")) {
         const data = await postJson("/api/inputs/delete", {
           name,
           programId: V.program === null || V.program === undefined ? "" : V.program.id,
+          store: storeOf(),
         });
         closeAsk();
         applyState(data.state);
@@ -950,13 +959,13 @@ if (location.search.includes("selftest")) {
     if (action.disabled) return;
     try {
       if (kind === "undo") {
-        const data = await postJson("/api/inputs/undo", {});
+        const data = await postJson("/api/inputs/undo", { store: storeOf() });
         applyState(data.state);
         note(`已撤回：${data.event.file} 放回输入`);
       } else if (kind === "rebuild") {
         action.disabled = true;
         note("正在重建输入批次……");
-        const data = await postJson("/api/inputs/rebuild", {});
+        const data = await postJson("/api/inputs/rebuild", { store: storeOf() });
         applyState(data.state);
         note(data.ok ? "输入批次已重建，需要重新运行" : `重建失败：${data.failure || "看终端输出"}`, data.ok ? undefined : "bad");
         action.disabled = false;

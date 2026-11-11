@@ -195,7 +195,7 @@ class _Handler(BaseHTTPRequestHandler):
                     program_id=str(project["id"]),
                     session_id=project["activeSessionId"],
                 )
-                state = self._state()
+                state = self._state(store)
                 # 项目页是服务现场渲染的：把输入运行态一起带上，导入/删除才不是死的。
                 # 输入目录不可用时根开关跟着关掉，按钮灰着比点下去报错诚实。
                 runtime = {
@@ -208,21 +208,34 @@ class _Handler(BaseHTTPRequestHandler):
 
     # ---- 状态 ----
 
-    def _state(self) -> dict[str, Any]:
-        store = self.stores[0]
-        payload: dict[str, Any] = {"mode": "live", "stores": [str(item) for item in self.stores]}
+    def _pick_store(self, raw: object) -> Path:
+        """页面把 store 路径带回来：多 store 时状态必须跟着项目所属的 store 走。"""
+        value = str(raw or "")
+        if value:
+            for store in self.stores:
+                if str(store) == value:
+                    return store
+        return self.stores[0]
+
+    def _state(self, store: Path | None = None) -> dict[str, Any]:
+        target = self.stores[0] if store is None else store
+        payload: dict[str, Any] = {
+            "mode": "live",
+            "store": str(target),
+            "stores": [str(item) for item in self.stores],
+        }
         try:
             ground: GroundTruth = resolve_ground_truth()
         except VibeError as error:
             return {**payload, "editable": False, "error": str(error)}
-        pending = last_removal(store)
+        pending = last_removal(target)
         return {
             **payload,
             "editable": True,
             "manifest": str(ground.manifest),
             "groundTruth": str(ground.directory),
             "files": list_files(ground),
-            "events": events(store)[-20:],
+            "events": events(target)[-20:],
             "canUndo": pending is not None,
             "undoFile": None if pending is None else pending.get("file"),
         }
@@ -286,7 +299,6 @@ class _Handler(BaseHTTPRequestHandler):
         return payload
 
     def _mutate(self, path: str, body: bytes) -> None:
-        store = self.stores[0]
         if path == "/api/projects/archive":
             payload = self._payload(body)
             program_id = str(payload.get("programId") or "").strip()
@@ -303,27 +315,38 @@ class _Handler(BaseHTTPRequestHandler):
             name = unquote(self.headers.get("X-Filename") or "")
             ground = resolve_ground_truth()
             result = add_file(ground, name, body)
-            self._api({"ok": True, "file": result, "state": self._state()})
+            wanted = self._pick_store(self.headers.get("X-Store"))
+            self._api({"ok": True, "file": result, "state": self._state(wanted)})
             return
         if path == "/api/inputs/delete":
             payload = json.loads(body or b"{}")
             ground = resolve_ground_truth()
             name = str(payload.get("name") or "")
+            program_id = str(payload.get("programId") or "")
+            # 多 store 时按项目找到它自己的那个：事件、.trash、状态都跟项目走
+            owner = self._pick_store(payload.get("store"))
+            if program_id:
+                owner = self._store_of(program_id)
             # 影响面由服务端从同一份视图里算：页面只说是哪个文件。
             # 链路要写给将来的 agent 看，不能靠前端传上来一份可能对不上的。
-            tables, chain = _impact(store, str(payload.get("programId") or ""), name)
-            event = remove_file(ground, store, name, tables=tables, chain=chain)
-            self._api({"ok": True, "event": event, "state": self._state()})
+            tables, chain = _impact(owner, program_id, name)
+            event = remove_file(ground, owner, name, tables=tables, chain=chain)
+            self._api({"ok": True, "event": event, "state": self._state(owner)})
             return
         if path == "/api/inputs/undo":
             ground = resolve_ground_truth()
-            event = undo_removal(ground, store)
-            self._api({"ok": True, "event": event, "state": self._state()})
+            # 撤回的是这个项目所在 store 的最近一次移出，不是第一个 store 的
+            owner = self._pick_store(json.loads(body or b"{}").get("store"))
+            event = undo_removal(ground, owner)
+            self._api({"ok": True, "event": event, "state": self._state(owner)})
             return
         if path == "/api/inputs/rebuild":
+            owner = self._pick_store(json.loads(body or b"{}").get("store"))
             result = _rebuild_batch()
-            archived = promote_trash(store) if result["code"] == 0 else []
-            self._api({"ok": result["code"] == 0, **result, "archived": archived, "state": self._state()})
+            archived = promote_trash(owner) if result["code"] == 0 else []
+            self._api(
+                {"ok": result["code"] == 0, **result, "archived": archived, "state": self._state(owner)}
+            )
             return
         self._api({"ok": False, "error": f"未知接口：{path}"}, status=404)
 

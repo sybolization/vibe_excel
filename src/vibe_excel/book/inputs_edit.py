@@ -321,7 +321,12 @@ def _sha256(path: Path) -> str:
 
 
 def last_removal(store: Path) -> dict[str, object] | None:
-    """最近一次还能撤回的移出操作（未被 undo 的那条）。"""
+    """最近一次还能撤回的移出操作。
+
+    两个条件都要成立：没被 undo 过，且它在 .trash 里的那份文件还在——
+    重建批次之后移出桶会转进 .archive，那时就没法再「撤回」了，
+    按钮该直接灰掉，而不是让人点下去撞一句报错。
+    """
     undone: set[str] = set()
     pending: list[dict[str, object]] = []
     for item in events(store):
@@ -330,8 +335,12 @@ def last_removal(store: Path) -> dict[str, object] | None:
         elif item.get("kind") == "undo":
             undone.add(str(item.get("trash") or ""))
     for item in reversed(pending):
-        if str(item.get("trash") or "") not in undone:
-            return item
+        bucket = str(item.get("trash") or "")
+        if bucket in undone:
+            continue
+        if not (Path(bucket) / str(item.get("file") or "")).is_file():
+            continue
+        return item
     return None
 
 
