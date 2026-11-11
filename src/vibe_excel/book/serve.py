@@ -601,12 +601,15 @@ def serve(
             raise VibeError(f"不是 store（缺 control.db）：{store}")
     # 工作区根目录：新建项目落在它下面。不给就用第一个库的上一级。
     workspace_root = root if root is not None else stores[0].parent
+    runner = Runner()
     handler = type(
         "BoundHandler",
         (_Handler,),
-        {"stores": stores, "root": workspace_root, "runner": Runner()},
+        {"stores": stores, "root": workspace_root, "runner": runner},
     )
     httpd = ThreadingHTTPServer((host, port), handler)
+    # 后台 job 靠这个线程唤醒对话：服务活着它就活着
+    runner.start_watcher()
     url = f"http://{host}:{port}/"
     print(f"服务已启动：{url}")
     print(f"  工作区 {', '.join(str(item) for item in stores)}")
