@@ -357,28 +357,17 @@ def test_resolve_store_only_accepts_the_stores_the_service_opened(tmp_path: Path
 
 
 def test_render_index_offers_create_only_when_server_hosted() -> None:
-    choices = [("C:\\data\\store", "store")]
-
     # build 出来的静态站点没有接口可写盘：新建入口整个不渲染
     static = render_index([], store_label="store")
     assert 'data-act="create"' not in static
     assert "/api/projects/create" not in static
     assert ">新建项目</button>" not in static
 
-    live = render_index([], store_label="store", can_create=True, store_choices=choices)
+    live = render_index([], store_label="0 个项目", can_create=True)
     assert 'data-act="create"' in live
     assert ">新建项目</button>" in live
     assert "/api/projects/create" in live
-    # 只有一个 store 时不出现选择器；路径仍然交给页面，提交时才有 store 可用
-    assert '<select class="ix-store">' not in live
-    assert '"path":"C:\\\\data\\\\store"' in live
-
-    many = render_index(
-        [],
-        store_label="2 个 store",
-        can_create=True,
-        store_choices=[("C:\\a", "a"), ("C:\\b", "b")],
-    )
-    assert '<select class="ix-store">' in many
-    assert '<option value="C:\\a">a</option>' in many
-    assert '<option value="C:\\b">b</option>' in many
+    # 一个项目就是一个工作区：弹层里只问名字，不再让人选库
+    assert 'class="ix-store"' not in live
+    assert "store</label>" not in live
+    assert 'name="store"' not in live

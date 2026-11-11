@@ -9,7 +9,6 @@ from __future__ import annotations
 from datetime import datetime
 from html import escape
 
-from ..util import escape_for_script, json_text
 from .projects import page_name
 from .projects_edit import MAX_PROJECT_NAME
 from .render import THEME_ICONS, THEME_SCRIPT, _asset, font_face_css
@@ -72,6 +71,7 @@ body.ix .fbar{right:12px}
 .ix-scrim{position:fixed;inset:0;z-index:69;background:rgba(24,24,28,.34)}
 .ix-newdlg{width:340px;left:50%;top:50%;transform:translate(-50%,-50%)}
 .ix-newdlg .ix-l{display:block;margin-top:9px;color:var(--ink2);font-size:11.5px}
+.ix-newdlg .ix-hint{margin-top:9px;color:var(--muted);font-size:11.5px;line-height:16px}
 .ix-newdlg input,.ix-newdlg select{display:block;width:100%;height:30px;margin-top:4px;padding:0 8px;
   border:1px solid var(--line);border-radius:8px;background:var(--fill);color:var(--ink);
   font:12.5px/1.4 var(--font)}
@@ -228,9 +228,8 @@ _ARCHIVE_SCRIPT = """
 _CREATE_SCRIPT = """
 (() => {
   /* 新建项目：交互留在页内，不跳页，也不用浏览器 prompt。
-     弹层本身由服务端渲染（只有一个 store 时连选择器都没有），这里只管开合、校验与提交。
+     弹层本身由服务端渲染，这里只管开合、校验与提交。
      只在服务托管的索引页注入；build 出来的静态站点没有接口可调，按钮本身就不渲染。 */
-  const STORES = __STORES__;
   const MAX = __MAX__;
   const BAD = /[\\/\\\\:*?"<>|]/;
   const trigger = document.querySelector('[data-act="create"]');
@@ -238,7 +237,6 @@ _CREATE_SCRIPT = """
   if (trigger === null || box === null) return;
   const scrim = document.getElementById("ix-new-scrim");
   const input = box.querySelector(".ix-name");
-  const picker = box.querySelector(".ix-store");
   const errorLine = box.querySelector(".ask-e");
   const ok = box.querySelector('[data-new="ok"]');
   const cancel = box.querySelector('[data-new="cancel"]');
@@ -266,14 +264,13 @@ _CREATE_SCRIPT = """
       input.focus();
       return;
     }
-    const store = picker === null ? (STORES[0] ?? {}).path : picker.value;
     ok.disabled = true;
     errorLine.textContent = "";
     try {
       const response = await fetch("/api/projects/create", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name: input.value.trim(), store }),
+        body: JSON.stringify({ name: input.value.trim() }),
       });
       let data;
       try {
@@ -406,7 +403,7 @@ def render_index(
     pages: dict[str, str] | None = None,
     can_archive: bool = False,
     can_create: bool = False,
-    store_choices: list[tuple[str, str]] | None = None,
+    workspace_hint: str = "",
 ) -> str:
     """把项目列表渲染成索引页。
 
@@ -416,7 +413,7 @@ def render_index(
     不传时按默认命名连（测试与单项目预览用）。
     can_archive / can_create：由服务托管时传 True，页面才出现「删除」「新建项目」
     并注入对应的脚本。build 出来的静态站点没有接口可调，给一个点了会报错的按钮不诚实。
-    store_choices：can_create 时页面要提交的 (store 绝对路径, 显示名)。
+    workspace_hint：can_create 时告诉人新项目会落在哪儿。
     只有一个 store 时不出选择器，但仍要把路径交给页面，接口才认得出往哪写。
     """
     css = _asset("app.css")
@@ -449,30 +446,17 @@ def render_index(
     create_ui = ""
     create_script = ""
     if can_create:
-        choices = list(store_choices or [])
         create_button = '<button class="ix-new" type="button" data-act="create">新建项目</button>'
-        picker = ""
-        if len(choices) > 1:
-            options = "".join(
-                f'<option value="{escape(path, quote=True)}">{escape(label)}</option>'
-                for path, label in choices
-            )
-            picker = f'<label class="ix-l">store<select class="ix-store">{options}</select></label>'
+        # 一个项目就是一个工作区：建的时候只问名字，没有「放进哪个库」这一步。
         create_ui = f"""<div class="ix-scrim" id="ix-new-scrim" hidden></div>
 <div class="ask ix-newdlg" id="ix-new" role="dialog" aria-modal="true" aria-labelledby="ix-new-h" hidden>
   <div class="ask-h" id="ix-new-h">新建项目</div>
   <label class="ix-l">项目名<input class="ix-name" type="text" maxlength="{MAX_PROJECT_NAME}" autocomplete="off" spellcheck="false"></label>
-  {picker}
+  <div class="ix-hint">{escape(workspace_hint) if workspace_hint else "会为它新建一个工作区，数据、运行和对话都放在里面。"}</div>
   <div class="ask-e" role="alert"></div>
   <div class="ask-f"><button class="tbtn" type="button" data-new="cancel">取消</button><button class="tbtn go" type="button" data-new="ok">创建</button></div>
 </div>"""
-        stores_json = escape_for_script(
-            json_text([{"path": path, "label": label} for path, label in choices])
-        )
-        # 先替换数字占位符：store 名来自磁盘，理论上可能包含 __MAX__ 这种字样。
-        script = _CREATE_SCRIPT.replace("__MAX__", str(MAX_PROJECT_NAME)).replace(
-            "__STORES__", stores_json
-        )
+        script = _CREATE_SCRIPT.replace("__MAX__", str(MAX_PROJECT_NAME))
         create_script = f"\n<script>\n{script}\n</script>"
     return f"""<!DOCTYPE html>
 <html lang="zh-CN">
@@ -489,7 +473,7 @@ def render_index(
 <body class="ix">
 <header class="glass fbar">
   <div class="brand"><b>{escape(title)}</b><span>项目</span></div>
-  <span class="rev">{escape(store_label)}</span>
+  {f'<span class="rev">{escape(store_label)}</span>' if store_label else ""}
   <span class="grow"></span>
   {create_button}<span class="rev" id="ix-count">{count} 个项目</span>
   <button class="iconbtn" data-act="theme" title="切换深色 / 浅色" aria-label="切换深色 / 浅色">{THEME_ICONS}</button>

@@ -37,7 +37,7 @@ from .inputs_edit import (
     undo_removal,
 )
 from .projects import collect_projects, page_name
-from .projects_edit import archive_project, create_project
+from .projects_edit import archive_project, create_workspace
 from .render import _ASSETS, render_book, render_empty_book
 from .types import ProjectSummary
 
@@ -230,29 +230,42 @@ class _Handler(BaseHTTPRequestHandler):
 
     # ---- 页面 ----
 
+    def _workspaces(self) -> list[Path]:
+        """工作区 = 一个库。启动时给的，加上 root 下新出现的。
+
+        新建项目会在 root 下开一个新工作区，服务不重启也要能看见它。
+        """
+        found = list(self.stores)
+        seen = {str(item) for item in found}
+        root = getattr(self, "root", None)
+        if root is not None and root.is_dir():
+            for child in sorted(root.iterdir()):
+                if not child.is_dir() or str(child) in seen:
+                    continue
+                if (child / "control.db").is_file():
+                    found.append(child)
+                    seen.add(str(child))
+        return found
+
     def _index_html(self) -> str:
-        multi = len(self.stores) > 1
         pairs: list[tuple[Path, ProjectSummary]] = []
-        for store in self.stores:
+        for store in self._workspaces():
             for project in collect_projects(store):
-                if multi:
-                    project["store"] = _store_label(store)
                 pairs.append((store, project))
-        label = self.stores[0].name if not multi else f"{len(self.stores)} 个 store"
         pages = {str(project["id"]): page_name(str(project["id"])) for _, project in pairs}
-        # 新建弹层要知道每个 store 的绝对路径：接口只认这个列表里的路径。
-        choices = [(str(store), _store_label(store)) for store in self.stores]
+        root = getattr(self, "root", None)
+        hint = "" if root is None else f"新建在 {root} 下，一个项目一个工作区。"
         return render_index(
             [project for _, project in pairs],
-            store_label=label,
+            store_label="",
             pages=pages,
             can_archive=True,
-            can_create=True,
-            store_choices=choices,
+            can_create=root is not None,
+            workspace_hint=hint,
         )
 
     def _project_html(self, name: str) -> str | None:
-        for store in self.stores:
+        for store in self._workspaces():
             for project in collect_projects(store):
                 if page_name(str(project["id"])) != name:
                     continue
@@ -282,19 +295,21 @@ class _Handler(BaseHTTPRequestHandler):
 
     def _pick_store(self, raw: object) -> Path:
         """页面把 store 路径带回来：多 store 时状态必须跟着项目所属的 store 走。"""
+        workspaces = self._workspaces()
         value = str(raw or "")
         if value:
-            for store in self.stores:
+            for store in workspaces:
                 if str(store) == value:
                     return store
-        return self.stores[0]
+        return workspaces[0]
 
     def _state(self, store: Path | None = None) -> dict[str, Any]:
-        target = self.stores[0] if store is None else store
+        workspaces = self._workspaces()
+        target = workspaces[0] if store is None else store
         payload: dict[str, Any] = {
             "mode": "live",
             "store": str(target),
-            "stores": [str(item) for item in self.stores],
+            "stores": [str(item) for item in workspaces],
         }
         try:
             ground: GroundTruth = resolve_ground_truth()
@@ -408,8 +423,8 @@ class _Handler(BaseHTTPRequestHandler):
                 self._api({"ok": False, "error": str(error)}, status=400)
 
     def _store_of(self, program_id: str) -> Path:
-        """站点可能合并多个 store：按项目 id 找到它所在的那个。"""
-        for store in self.stores:
+        """按项目 id 找到它所在的工作区（站点可能同时挂着好几个）。"""
+        for store in self._workspaces():
             if any(str(project["id"]) == program_id for project in collect_projects(store)):
                 return store
         raise VibeError(f"项目不存在或已归档：{program_id}")
@@ -427,10 +442,19 @@ class _Handler(BaseHTTPRequestHandler):
     def _mutate(self, path: str, body: bytes) -> None:
         if path == "/api/projects/create":
             payload = self._payload(body)
-            # store 只认服务启动时给的那几个：请求体里的路径不能当写盘目标用。
-            target = resolve_store(self.stores, payload.get("store"))
-            program = create_project(target, str(payload.get("name") or ""))
-            self._api({"ok": True, "id": str(program.id), "name": program.name})
+            # 不再问「放进哪个库」：一个项目就是一个工作区，新的一律建在 root 下。
+            root = getattr(self, "root", None)
+            if root is None:
+                raise VibeError("这个服务没有可用的工作区根目录，建不了项目")
+            workspace, program = create_workspace(root, str(payload.get("name") or ""))
+            self._api(
+                {
+                    "ok": True,
+                    "id": str(program.id),
+                    "name": str(program.name),
+                    "workspace": str(workspace),
+                }
+            )
             return
         if path == "/api/projects/archive":
             payload = self._payload(body)
@@ -518,17 +542,27 @@ class _Handler(BaseHTTPRequestHandler):
 
 
 def serve(
-    stores: list[Path], *, port: int = 8731, host: str = "127.0.0.1", open_browser: bool = True
+    stores: list[Path],
+    *,
+    port: int = 8731,
+    host: str = "127.0.0.1",
+    open_browser: bool = True,
+    root: Path | None = None,
 ) -> int:
     """起服务并阻塞。Ctrl+C 结束。"""
     for store in stores:
         if not (store / "control.db").is_file():
             raise VibeError(f"不是 store（缺 control.db）：{store}")
-    handler = type("BoundHandler", (_Handler,), {"stores": stores})
+    # 工作区根目录：新建项目落在它下面。不给就用第一个库的上一级。
+    workspace_root = root if root is not None else stores[0].parent
+    handler = type(
+        "BoundHandler", (_Handler,), {"stores": stores, "root": workspace_root}
+    )
     httpd = ThreadingHTTPServer((host, port), handler)
     url = f"http://{host}:{port}/"
     print(f"服务已启动：{url}")
-    print(f"  store  {', '.join(str(item) for item in stores)}")
+    print(f"  工作区 {', '.join(str(item) for item in stores)}")
+    print(f"  新建到 {workspace_root}")
     try:
         ground = resolve_ground_truth()
         print(f"  inputs {ground.directory}（{len(ground.files)} 个文件）")

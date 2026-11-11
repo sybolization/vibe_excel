@@ -163,10 +163,11 @@ def _run_serve(argv: list[str]) -> int:
     stores: list[Path] = []
     port = 8731
     open_browser = True
+    root: Path | None = None
     index = 1
     while index < len(argv):
         token = argv[index]
-        if token not in ("--store", "--port", "--no-open"):
+        if token not in ("--store", "--port", "--no-open", "--root"):
             raise VibeError(f"未知参数 {token}\n用法：{USAGE}")
         if token == "--no-open":
             open_browser = False
@@ -177,6 +178,9 @@ def _run_serve(argv: list[str]) -> int:
         value = argv[index + 1]
         if token == "--store":
             stores.append(Path(value).resolve())
+        elif token == "--root":
+            # new projects land under it; default is the parent of the first store
+            root = Path(value).resolve()
         else:
             try:
                 port = int(value)
@@ -187,7 +191,7 @@ def _run_serve(argv: list[str]) -> int:
         raise VibeError(f"缺少参数 --store\n用法：{USAGE}")
     from .serve import serve
 
-    return serve(stores, port=port, open_browser=open_browser)
+    return serve(stores, port=port, open_browser=open_browser, root=root)
 
 
 def run_cli(argv: list[str]) -> int:

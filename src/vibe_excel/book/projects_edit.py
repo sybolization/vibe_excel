@@ -113,6 +113,30 @@ def _duplicate_name(store: Path, name: str) -> tuple[str, bool] | None:
     return None
 
 
+def create_workspace(root: str | Path, name: str) -> tuple[Path, Program]:
+    """在 root 下新建一个工作区，并给它建同名空项目。
+
+    一个项目就是一个工作区：目录建不出来就别留下半个，免得索引页扫到一份读不了的库。
+    """
+    base = Path(root).resolve()
+    clean = _clean_name(name)
+    target = base / clean
+    if target.exists():
+        if (target / "control.db").is_file():
+            raise VibeError(f"已经有了同名的工作区「{clean}」")
+        raise VibeError(f"{clean} 这个名字已被 {target} 下的其它内容占用")
+    try:
+        target.mkdir(parents=True)
+    except OSError as error:
+        raise VibeError(f"建不了工作区目录 {target}：{error}") from error
+    try:
+        with SessionStore.open(target) as db:
+            return target, db.create_program(clean)
+    except Exception:
+        shutil.rmtree(target, ignore_errors=True)
+        raise
+
+
 def create_project(store: str | Path, name: str) -> Program:
     """在 store 里建一个空项目：只有空仓库与 programs 记录，没有会话。
 
