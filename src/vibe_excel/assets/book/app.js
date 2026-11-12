@@ -451,7 +451,7 @@
       const sheets = [...new Set(f.direct.map((r) => r.sheet).filter((s) => s !== null))];
       const meta = stale.has(f.name)
         ? "已移出输入 · 重建批次前不可用"
-        : `${sheets.length} 个 sheet · ${all.length} 张表 · ${kb(f.bytes)}`;
+        : `${sheets.length} 个 sheet · ${f.direct.length} 张原始 · ${f.derived.length} 张派生 · ${kb(f.bytes)}`;
       rows.push(`<div class="row${stale.has(f.name) ? " stale" : ""}" data-f="${i}">
         <span class="t"><span class="n" title="${esc(f.name)}">${esc(f.name)}</span><span class="m">${esc(meta)}</span></span>
         ${LIVE ? `<span class="del" data-del="${esc(f.name)}" title="移出这个文件">×</span>` : ""}
@@ -523,19 +523,31 @@
   const sel = { value: 0 };
 
   function filePane(f) {
-    const all = f.direct.concat(f.derived);
-    const links = all.map((r) => `<div class="link"><span class="nm">${esc(show(r.name))}</span><span class="x">${esc(r.rows === null ? "—" : `${num(r.rows)}×${r.columns}`)}</span></div>`).join("");
+    /* 原始表与派生表分开列：前者是这个文件直接读进来的，后者是运行里某一步算出来的。
+       混在一起列成「被物化成 N 张」，会让人以为一张 sheet 被物化成了好几张表。 */
+    const rows = (list) =>
+      `<div class="links2">${list
+        .map(
+          (r) =>
+            `<div class="link"><span class="nm">${esc(show(r.name))}</span><span class="x">${esc(r.rows === null ? "—" : `${num(r.rows)}×${r.columns}`)}</span></div>`,
+        )
+        .join("")}</div>`;
+    const group = (title, hint, list) =>
+      list.length === 0
+        ? ""
+        : `<div class="ilabel">${title}<span class="r">${list.length} 张</span></div><div class="note">${hint}</div>${rows(list)}`;
     const sheets = [...new Set(f.direct.map((r) => r.sheet).filter((s) => s !== null))];
     return `
-      <div class="pane" style="width:330px;flex:none">
+      <div class="pane fix">
         <div class="selh"><span class="nm">${esc(f.name)}</span><span class="st">${esc(kb(f.bytes))}</span></div>
-        <div class="note">${f.direct.length} 张物化/导入 · ${f.derived.length} 张派生 · ${f.inBatch ? "在本次批次" : "不在本次批次"}</div>
+        <div class="note">${f.direct.length} 张原始表 · ${f.derived.length} 张派生表 · ${f.inBatch ? "在本次批次" : "不在本次批次"}</div>
         <div class="note">sheet：${esc(sheets.join(" · ") || "—")}</div>
         <div class="note">${esc(f.sha256 === null ? "没有 sha256 记录" : `sha256 ${f.sha256.slice(0, 16)}…`)}</div>
       </div>
       <div class="pane grow">
-        <div class="ilabel">被物化成<span class="r">${all.length} 张</span></div>
-        <div class="links2">${links || '<div class="note">这个文件还没有物化记录</div>'}</div>
+        ${group("原始表", "这个文件直接读进来的，只做列改名", f.direct)}
+        ${group("派生表", "运行里的某一步算出来的", f.derived)}
+        ${f.direct.length === 0 && f.derived.length === 0 ? '<div class="note">这个文件还没有物化记录</div>' : ""}
       </div>`;
   }
 
@@ -924,6 +936,14 @@ if (location.search.includes("selftest")) {
     if (bare !== undefined) {
       clickNode(bare);
       out.push(`stepEmpty=${bar.textContent.includes("没有标注步骤")}`);
+    }
+
+    /* 文件详情：原始表与派生表要分开列，不能合成一个「被物化成 N 张」 */
+    const fileNode = N.find((n) => n.kind === "file");
+    if (fileNode !== undefined) {
+      clickNode(fileNode);
+      const text = bar.querySelector(".bp-bd").textContent;
+      out.push(`fileGroups=${text.includes("原始表") && text.includes("派生表")}`);
     }
 
     /* 表名被省略号截掉是这次要修的病：选中一个节点后逐个量一遍 */
