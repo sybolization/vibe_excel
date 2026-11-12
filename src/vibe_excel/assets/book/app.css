@@ -200,6 +200,14 @@ button{font:inherit;color:inherit;background:none;border:0;cursor:pointer}
 .bp-diag:hover{background:var(--hover);color:var(--ink)}
 .bp-diag.on{background:var(--accent-soft);color:var(--ink)}
 .bp-diag.bad{color:var(--bad)}
+/* 收起来的那一叠（原始表 / 中间表）：一行文字，点开才铺开。
+   收起时它只说明「还有多少」，不占版面。 */
+.more{margin-top:10px}
+.more>summary{cursor:pointer;list-style:none;font:11.5px/1.6 var(--font);color:var(--muted);padding:2px 0}
+.more>summary::-webkit-details-marker{display:none}
+.more>summary:hover{color:var(--ink2)}
+.more[open]>summary{margin-bottom:4px}
+.more .link{height:24px}
 .dg-list{display:flex;flex-direction:column;gap:6px;width:100%;min-width:0}
 .dg-row{display:block;font:12px/1.5 var(--font);color:var(--ink2);
   border-radius:8px;padding:3px 6px;margin:0 -6px}
