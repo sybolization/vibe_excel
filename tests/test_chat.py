@@ -320,6 +320,14 @@ def test_system_prompt_tells_it_where_it_works() -> None:
     assert "没有工具可用" not in prompt
 
 
+def test_system_prompt_asks_for_step_annotations() -> None:
+    """页面与终端都读代码里的步骤说明，prompt 必须交代这件事。"""
+    prompt = system_prompt(PROGRAM, [])
+
+    assert "计算过程" in prompt
+    assert "一句话字符串" in prompt
+
+
 def test_system_prompt_lists_recent_input_changes() -> None:
     prompt = system_prompt(
         PROGRAM,

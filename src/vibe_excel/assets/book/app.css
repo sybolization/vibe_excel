@@ -295,6 +295,20 @@ button{font:inherit;color:inherit;background:none;border:0;cursor:pointer}
 /* 标识符：只用在这个位置明确是 ASCII 的地方 */
 .idm{font-family:var(--mono);font-variant-numeric:tabular-nums}
 .pane .note.mono{font:11px/1.5 var(--mono);color:var(--muted);overflow-wrap:anywhere}
+/* 计算过程：行号与分支类型各占一个固定列，说明从同一条线上开始。
+   两行之后收（-webkit-line-clamp），完整句子在 title 里，不是砍掉就没有了。 */
+.steps{display:flex;flex-direction:column;gap:2px;margin-top:2px}
+.step{display:flex;align-items:flex-start;gap:10px;padding:2px 0;
+  font:12px/1.55 var(--font);color:var(--ink2)}
+.step .ln{flex:none;width:34px;text-align:right;font:11px/1.7 var(--mono);color:var(--faint)}
+.step .tag{flex:none;min-width:38px;font:11px/1.7 var(--mono);color:var(--muted)}
+.step .tx{flex:1;min-width:0;overflow:hidden;display:-webkit-box;-webkit-box-orient:vertical;
+  -webkit-line-clamp:2;text-overflow:unset}
+.steps-foot{margin-top:10px;font:11.5px/1.6 var(--font);color:var(--muted);
+  display:flex;align-items:baseline;gap:6px;flex-wrap:wrap}
+.steps-foot .sep{color:var(--faint)}
+.tlink{font:11.5px var(--font);color:var(--ink2);border-radius:5px;padding:0 2px}
+.tlink:hover{background:var(--hover);color:var(--ink)}
 .pane .note.doc{font-size:12px;line-height:1.55;color:var(--ink2);margin-top:2px;
   white-space:normal;overflow:hidden;display:-webkit-box;-webkit-box-orient:vertical;
   -webkit-line-clamp:3;text-overflow:unset}

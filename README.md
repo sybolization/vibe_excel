@@ -59,6 +59,9 @@ uv run pytest
 | `db` | 打印业务库的语义摘要（每表行数 + 内容哈希） |
 | `plugins` / `help` | 宿主命令：插件状态与命令说明 |
 
+写 pipeline 代码时怎么给每一步留说明（页面的「计算过程」和 `flow` 摘要都读它）：
+见 [docs/pipelines.md](docs/pipelines.md)。
+
 ## 配置
 
 清单是 `vibe.plugins.yml`，支持 `${VAR}` / `${VAR:-默认值}` 插值。常用环境变量：

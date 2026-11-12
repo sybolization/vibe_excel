@@ -543,6 +543,40 @@
     return `<div class="link"><span class="nm">${esc(label)}</span><span class="x">${esc(value)}</span></div>`;
   }
 
+  /* ---------- 计算过程：agent 写代码时留下的步骤说明 ----------
+     来源是 run.json 的 graph.nodes[].steps：解析器把「块首字符串」和「语句前的
+     裸字符串」当作说明，带行号存进运行记录。终端早就在显示它
+     （describe_flow(steps=True)），页面一直没有。 */
+  const stepTag = (step) => {
+    /* block 才有分支类型（for/if/…）；statement 是默认情形，不标反而更清楚。 */
+    if (step.kind !== "block") return "";
+    return String(step.of ?? "").toLowerCase();
+  };
+
+  function stepList(g) {
+    if (g === undefined) {
+      return '<div class="note">本次运行没有跑这一步，看不到它的计算过程</div>';
+    }
+    const steps = Array.isArray(g.steps) ? g.steps : [];
+    if (steps.length === 0) {
+      return '<div class="note">这个节点没有标注步骤</div><div class="note">在代码里用一句话说明每一步，这里和终端都会显示</div>';
+    }
+    const rows = steps
+      .map(
+        (step) =>
+          `<div class="step"><span class="ln">L${esc(String(step.line ?? "?"))}</span><span class="tag">${esc(stepTag(step))}</span><span class="tx" title="${esc(String(step.label ?? ""))}">${esc(String(step.label ?? ""))}</span></div>`,
+      )
+      .join("");
+    return `<div class="ilabel">计算过程<span class="r">${steps.length} 步</span></div><div class="steps">${rows}</div>`;
+  }
+
+  /* 读写在步骤之下压成一行：点击表名就跳过去，比两栏列表省一半高度。 */
+  function tableFoot(reads, writes) {
+    const one = (label, list) =>
+      `${label} ${list.length === 0 ? "—" : list.map((t) => `<button class="tlink" data-table="${esc(t)}">${esc(show(t))}</button>`).join("、")}`;
+    return `<div class="steps-foot">${one("读", reads)}<span class="sep">·</span>${one("写", writes)}</div>`;
+  }
+
   function nodePane(n) {
     /* sheet 现在是画布上的一等节点：它物化成哪张表，写在它自己身上。 */
     if (n.kind === "sheet") {
@@ -586,12 +620,7 @@
           <div class="note mono">${esc(where === "" ? "没有文件记录" : where)}</div>
           ${doc === "" ? "" : `<div class="note doc">${esc(doc)}</div>`}
         </div>
-        <div class="pane grow">
-          <div class="ilabel">读<span class="r">${reads.length} 张</span></div>
-          <div class="links2">${reads.map((t) => linkRow(show(t), show(t) === t ? "" : t)).join("") || '<div class="note">不读任何表</div>'}</div>
-          <div class="ilabel">写<span class="r">${writes.length} 张</span></div>
-          <div class="links2">${writes.map((t) => linkRow(show(t), show(t) === t ? "" : t)).join("") || '<div class="note">不写表</div>'}</div>
-        </div>`;
+        <div class="pane grow">${stepList(g)}${tableFoot(reads, writes)}</div>`;
     }
 
     const row = tableRows.get(n.label);
@@ -808,6 +837,14 @@
       navigator.clipboard.writeText(text).then(done).catch(() => note("复制失败，请手动选中", "bad"));
       return;
     }
+    const table = e.target.closest(".tlink");
+    if (table !== null) {
+      /* 步骤下面那行「读 x · 写 y」里的表名：点一下就切到那张表 */
+      const label = table.getAttribute("data-table") ?? "";
+      const node = N.find((n) => n.kind === "table" && n.label === label);
+      if (node !== undefined) selectNode(node);
+      return;
+    }
     const row = e.target.closest(".dg-row");
     if (row !== null) {
       const id = row.getAttribute("data-node") ?? "";
@@ -869,6 +906,24 @@ if (location.search.includes("selftest")) {
       out.push(`diagOpen=${bar.querySelectorAll(".dg-row").length}`);
       bar.querySelector(".bp-diag").dispatchEvent(new MouseEvent("click", { bubbles: true }));
       out.push(`diagClosed=${bar.querySelectorAll(".dg-row").length === 0}`);
+    }
+
+    /* 计算过程：步骤要画出来，而且不能被横向截断 */
+    const stepNode = N.find((n) => n.kind === "compute" && (G?.nodes ?? []).some((g) => g.fn === n.label && (g.steps ?? []).length > 0));
+    if (stepNode === undefined) {
+      out.push("steps=skip(no-annotated-node)");
+    } else {
+      clickNode(stepNode);
+      const expect = (G.nodes.find((g) => g.fn === stepNode.label)?.steps ?? []).length;
+      out.push(`steps=${bar.querySelectorAll(".step").length}/${expect}`);
+      const cut = Array.from(bar.querySelectorAll(".step .tx"))
+        .filter((el) => el.scrollWidth > el.clientWidth + 1).length;
+      out.push(`stepClipped=${cut}`);
+    }
+    const bare = N.find((n) => n.kind === "compute" && (G?.nodes ?? []).some((g) => g.fn === n.label && (g.steps ?? []).length === 0));
+    if (bare !== undefined) {
+      clickNode(bare);
+      out.push(`stepEmpty=${bar.textContent.includes("没有标注步骤")}`);
     }
 
     /* 表名被省略号截掉是这次要修的病：选中一个节点后逐个量一遍 */

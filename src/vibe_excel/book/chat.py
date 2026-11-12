@@ -324,6 +324,8 @@ def system_prompt(
         "只在这个工作区里读写，不要动别处的文件。",
         "超过 15 秒的命令不要干等：用 python _chat/bg.py \"<command>\" 把它丢到后台，"
         "它立刻返回 job 名与日志路径；命令跑完我会把输出交给你，再继续。",
+        "改 pipeline 代码时，在每个分支/循环的第一行、每条关键语句前，用一句话字符串"
+        "说明它在做什么（不是 # 注释）；页面上的「计算过程」和终端摘要读的就是这些句子。",
     ]
     facts = context or {}
     files = [str(item) for item in facts.get("files") or []]

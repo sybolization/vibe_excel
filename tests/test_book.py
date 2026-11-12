@@ -208,6 +208,42 @@ def test_transcript_returns_none_for_empty_file() -> None:
 # ---------------------------------------------------------------------------
 
 
+def test_steps_need_both_line_and_label() -> None:
+    """只有行号或只有文本的条目都不算一步；留下来的按顺序从 1 编号。"""
+    graph = build_graph(
+        {
+            "runId": "r1",
+            "tables": {},
+            "sample": None,
+            "runJson": {
+                "graph": {
+                    "entry": "pipeline.py",
+                    "nodes": [
+                        {
+                            "id": "clean",
+                            "call": "pipeline.py:clean",
+                            "reads": [],
+                            "writes": [],
+                            "steps": [
+                                {"line": 12, "kind": "statement", "of": "Assign", "label": "先做的"},
+                                {"line": 14, "kind": "block", "of": "For", "label": "循环里做的"},
+                                {"line": 20, "kind": "statement", "of": "Assign", "label": ""},
+                                {"kind": "statement", "of": "Assign", "label": "没有行号"},
+                            ],
+                        }
+                    ],
+                }
+            },
+        }
+    )
+    assert graph is not None
+    steps = graph["nodes"][0]["steps"]
+    assert [(step["n"], step["line"], step["label"]) for step in steps] == [
+        (1, 12, "先做的"),
+        (2, 14, "循环里做的"),
+    ]
+
+
 def test_build_graph_restores_nodes_steps_materialize_and_outputs() -> None:
     """从 run.json 还原节点、步骤、物化与产出。"""
     graph = build_graph({"runId": "c4d807a6-c467", "tables": {}, "sample": None, "runJson": RUN_JSON})
