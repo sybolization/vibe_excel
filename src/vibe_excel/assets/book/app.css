@@ -193,7 +193,7 @@ button{font:inherit;color:inherit;background:none;border:0;cursor:pointer}
 .bp-path button{font:11.5px var(--font);color:var(--ink2)}
 .bp-path .sep{color:var(--faint);flex:none}
 .bp-meta{font:11.5px var(--font);font-variant-numeric:tabular-nums;color:var(--ink2);white-space:nowrap;flex:none}
-.bp-bd{flex:1;min-height:0;display:flex;gap:36px;padding:14px 16px;overflow:auto}
+.bp-bd{flex:1;min-height:0;display:flex;gap:28px;padding:12px 14px;overflow:auto}
 /* 诊断：底栏里的第二个视图。数字是文字，不是胶囊——它只是告诉你「有几条」。 */
 .bp-diag{flex:none;height:24px;padding:0 9px;border-radius:7px;font:11.5px var(--font);
   color:var(--ink2);display:flex;align-items:center;gap:6px}
@@ -217,23 +217,25 @@ button{font:inherit;color:inherit;background:none;border:0;cursor:pointer}
 .dg-copy{height:22px;padding:0 8px;margin-top:6px;border-radius:7px;font:11.5px var(--font);
   color:var(--ink2);border:1px solid var(--line2)}
 .dg-copy:hover{background:var(--hover);color:var(--ink)}
-.bp-ft{flex:none;display:flex;align-items:center;gap:8px;height:46px;padding:0 12px;border-top:1px solid var(--line2);background:var(--sunken)}
   border:1px solid var(--glass-line);background:var(--card);overflow:hidden}
 .pane{min-width:0;display:flex;flex-direction:column}
+/* 左栏是「这是谁」，右栏是「它连着什么」。左栏固定到能放下最长的名字，
+   剩下的都给右栏——以前写死 330，右栏两列一挤就开始截断。 */
+.pane.fix{flex:0 0 auto;width:284px}
 .pane.grow{flex:1}
 .selh{display:flex;align-items:baseline;gap:10px;min-width:0;margin-bottom:8px}
 .selh .nm{font-size:14px;font-weight:600;letter-spacing:-.01em;color:var(--ink);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .selh .st{font:11.5px var(--font);font-variant-numeric:tabular-nums;color:var(--muted);white-space:nowrap;flex:none}
 .note{font-size:12px;line-height:19px;color:var(--ink2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .ilabel{display:flex;align-items:baseline;gap:8px;font-size:11.5px;font-weight:500;color:var(--ink2);margin-bottom:7px}
-.ilabel .r{margin-left:auto;font:11px var(--font);font-variant-numeric:tabular-nums;font-weight:400;color:var(--muted)}
+.ilabel .r{margin-left:2px;font:11px var(--font);font-variant-numeric:tabular-nums;font-weight:400;color:var(--muted)}
 .link{display:flex;align-items:center;gap:8px;height:27px;padding:0 7px;border-radius:8px;font-size:12.5px;color:var(--ink);cursor:pointer;min-width:0}
 .link:hover{background:var(--hover)}
 /* 表名现在是中文名，等宽栈里没有汉字，落回系统 fallback 就不是鸿蒙了。
    真正的标识符仍然在 tooltip 和底栏的运行路径里，那些走等宽。 */
-.link .nm{font-family:var(--font);font-size:12.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.link .nm{font-family:var(--font);font-size:12.5px;overflow-wrap:anywhere}
 .link .x{margin-left:auto;font:11px var(--mono);color:var(--muted);flex:none}
-.links2{display:grid;grid-template-columns:repeat(2,minmax(0,320px));justify-content:start;gap:0 44px}
+.links2{display:grid;grid-template-columns:repeat(auto-fill,minmax(196px,1fr));justify-content:start;gap:0 32px}
 
 /* ---------- 缩放 ---------- */
 .fzoom{right:calc(var(--cw,360px) + 12px);bottom:264px;display:flex;align-items:center;gap:2px;height:32px;padding:0 7px;border-radius:16px;background:var(--glass-bar)}
@@ -286,12 +288,17 @@ button{font:inherit;color:inherit;background:none;border:0;cursor:pointer}
 
 /* 底栏可收成一条：它占的是画布最贵的那块地方 */
 .bp.folded{height:auto}
-.bp.folded .bp-bd,.bp.folded .bp-ft{display:none}
+.bp.folded .bp-bd{display:none}
 .bp-fold{width:24px;height:24px;display:grid;place-items:center;border-radius:7px;color:var(--ink2)}
 .bp-fold:hover{background:var(--hover)}
 
 /* 标识符：只用在这个位置明确是 ASCII 的地方 */
 .idm{font-family:var(--mono);font-variant-numeric:tabular-nums}
+.pane .note.mono{font:11px/1.5 var(--mono);color:var(--muted);overflow-wrap:anywhere}
+.pane .note.doc{font-size:12px;line-height:1.55;color:var(--ink2);margin-top:2px;
+  white-space:normal;overflow:hidden;display:-webkit-box;-webkit-box-orient:vertical;
+  -webkit-line-clamp:3;text-overflow:unset}
+.pane .note.mono{padding-top:2px}
 .selh .nm{max-width:60%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .pane .ilabel + .links2{margin-bottom:10px}
 
@@ -460,4 +467,3 @@ button{font:inherit;color:inherit;background:none;border:0;cursor:pointer}
 .evhd{font-size:11px;color:var(--faint);letter-spacing:.02em}
 
 /* 底栏页脚只剩一个按钮：靠右放，别贴在左边显得丢了东西 */
-.bp-ft{justify-content:flex-end}

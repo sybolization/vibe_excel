@@ -550,7 +550,7 @@
       const row = out === null ? undefined : tableRows.get(out.label);
       const owner = String(n.ref ?? "").split("\u0000")[0];
       return `
-        <div class="pane" style="width:330px;flex:none">
+        <div class="pane fix">
           <div class="selh"><span class="nm">${esc(n.label)}</span><span class="st">sheet</span></div>
           <div class="note">${row === undefined ? "没有行数记录" : `${num(row.rows)} 行 × ${row.columns} 列`}</div>
           <div class="note">来自 ${esc(owner === "" ? "—" : owner)}</div>
@@ -573,18 +573,24 @@
       const g = G === null ? undefined : G.nodes.find((x) => x.fn === n.label);
       const reads = g === undefined ? edgeTables(allEdges.filter((e) => e.to === n.id && e.kind === "read"), "from") : g.reads;
       const writes = g === undefined ? edgeTables(allEdges.filter((e) => e.from === n.id && e.kind === "write"), "to") : g.writes;
-      const when = n.run === true ? "在本次运行里跑过" : "不在本次运行里";
+      /* 这一行要不要写「上次」：只有没在本次运行里跑过时才提，平时不必解释。 */
+      const when = n.run === true ? `本次运行跑过 · ${dur(n.elapsedMs)}` : `本次运行没跑这一步 · 上次 ${dur(n.elapsedMs)}`;
+      /* 这步到底干什么：run.json 里有函数的文档注释，页面以前从来没读过。
+         没有注释时就退回「文件:函数」，至少能定位到代码。 */
+      const doc = g === undefined || g.title === null || g.title === undefined ? "" : String(g.title).trim();
+      const where = g === undefined ? String(n.file ?? "") : `${String(g.file).split(/[\\/]/).pop()}:${g.fn}`;
       return `
-        <div class="pane" style="width:330px;flex:none">
-          <div class="selh"><span class="nm">${esc(show(n.label))}</span><span class="st"><span class="idm">${esc(n.label)}</span></span></div>
-          <div class="note">这一步${when} · ${n.run === true ? "耗时" : "上次耗时"} ${dur(n.elapsedMs)}</div>
-          <div class="note">${esc(n.file === null ? "没有文件记录" : n.file.split(/[\\/]/).pop())}</div>
+        <div class="pane fix">
+          <div class="selh"><span class="nm">${esc(show(n.label))}</span></div>
+          <div class="note">${when}</div>
+          <div class="note mono">${esc(where === "" ? "没有文件记录" : where)}</div>
+          ${doc === "" ? "" : `<div class="note doc">${esc(doc)}</div>`}
         </div>
         <div class="pane grow">
           <div class="ilabel">读<span class="r">${reads.length} 张</span></div>
-          <div class="links2">${reads.map((t) => linkRow(show(t), show(t) === t ? "" : t)).join("") || '<div class="note">—</div>'}</div>
+          <div class="links2">${reads.map((t) => linkRow(show(t), show(t) === t ? "" : t)).join("") || '<div class="note">不读任何表</div>'}</div>
           <div class="ilabel">写<span class="r">${writes.length} 张</span></div>
-          <div class="links2">${writes.map((t) => linkRow(show(t), show(t) === t ? "" : t)).join("") || '<div class="note">—</div>'}</div>
+          <div class="links2">${writes.map((t) => linkRow(show(t), show(t) === t ? "" : t)).join("") || '<div class="note">不写表</div>'}</div>
         </div>`;
     }
 
@@ -594,15 +600,15 @@
     const writer = row === undefined || row.writer === undefined ? null : row.writer;
     const upstream = row === undefined ? [] : row.from;
     return `
-      <div class="pane" style="width:330px;flex:none">
-        <div class="selh"><span class="nm">${esc(show(n.label))}</span><span class="st"><span class="idm">${esc(n.label)}</span></span></div>
+      <div class="pane fix">
+        <div class="selh"><span class="nm">${esc(show(n.label))}</span></div>
         <div class="note">${n.rows === null ? "行数未知" : `${num(n.rows)} 行`}${n.columns === null ? "" : ` × ${n.columns} 列`}</div>
         <div class="note">${from === null ? (n.loose === true ? "没有上游，孤立的表" : "派生表，上游见右") : `来自 ${esc(from)}${sheet === null ? "" : ` · sheet ${esc(sheet)}`}`}</div>
         <div class="note">${writer === null || writer === undefined ? "不是任何节点写的（物化/导入）" : `由 ${esc(show(writer.fn))} 写出 · ${dur(writer.elapsedMs)}`}</div>
       </div>
       <div class="pane grow">
         <div class="ilabel">上游<span class="r">${upstream.length} 张</span></div>
-        <div class="links2">${upstream.map((t) => linkRow(show(t), show(t) === t ? "" : t)).join("") || '<div class="note">—</div>'}</div>
+        <div class="links2">${upstream.map((t) => linkRow(show(t), show(t) === t ? "" : t)).join("") || '<div class="note">没有上游</div>'}</div>
       </div>`;
   }
 
@@ -632,7 +638,9 @@
       return '<div class="pane grow"><div class="note">没有告警</div></div>';
     }
     const rows = ALERTS.map(alertRow).join("");
-    const tail = failures > 0 ? `<div class="note">${failures} 条失败 · ${ALERTS.length - failures} 条提示</div>` : `<div class="note">${ALERTS.length} 条提示</div>`;
+    /* 头部已经写着「诊断 · N」了，这里只在真的有失败时补一句分账：
+       全是提示的时候再写一遍「N 条提示」是重复。 */
+    const tail = failures > 0 ? `<div class="note">${failures} 条失败 · ${ALERTS.length - failures} 条提示</div>` : "";
     return `<div class="pane grow"><div class="dg-list">${rows}</div>${tail}</div>`;
   }
 
@@ -666,8 +674,7 @@
         <span class="bp-meta">${esc(meta)}</span>
         ${diagButton}
       <button class="bp-fold" title="收起/展开"><svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 7.5 6 4l3.5 3.5"/></svg></button></div>
-      ${DIAG.open === true ? "" : goneNote}<div class="bp-bd">${detail}</div>
-      <div class="bp-ft"><button class="btn off" disabled>复制</button></div>`;
+      ${DIAG.open === true ? "" : goneNote}<div class="bp-bd">${detail}</div>`;
   }
 
   /* ---------- 选中与聚焦 ---------- */
@@ -863,6 +870,11 @@ if (location.search.includes("selftest")) {
       bar.querySelector(".bp-diag").dispatchEvent(new MouseEvent("click", { bubbles: true }));
       out.push(`diagClosed=${bar.querySelectorAll(".dg-row").length === 0}`);
     }
+
+    /* 表名被省略号截掉是这次要修的病：选中一个节点后逐个量一遍 */
+    const clipped = Array.from(bar.querySelectorAll(".link .nm"))
+      .filter((el) => el.scrollWidth > el.clientWidth + 1).length;
+    out.push(`clipped=${clipped}/${bar.querySelectorAll(".link .nm").length}`);
 
     bar.querySelector(".bp-fold").dispatchEvent(new MouseEvent("click", { bubbles: true }));
     out.push(`folded=${bar.classList.contains("folded")}`);
