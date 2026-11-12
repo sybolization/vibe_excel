@@ -1107,7 +1107,10 @@ if (location.search.includes("selftest")) {
           headers: {
             "Content-Type": "application/octet-stream",
             "X-Filename": encodeURIComponent(file.name),
-            "X-Store": storeOf(),
+            /* store 路径可能带中文（工作区名就是项目名），而 HTTP 头只能是
+               ISO-8859-1：原样放进头里，fetch 在发出去之前就会抛
+               「String contains non ISO-8859-1 code point」。和文件名一样做百分号编码。 */
+            "X-Store": encodeURIComponent(storeOf()),
           },
           body: await file.arrayBuffer(),
         });

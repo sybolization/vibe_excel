@@ -494,9 +494,10 @@ class _Handler(BaseHTTPRequestHandler):
         if path == "/api/inputs/upload":
             # 前端把文件名 percent-encode 后放进 header：非 ASCII 直接塞 header 会被浏览器拒绝
             name = unquote(self.headers.get("X-Filename") or "")
+            # store 路径同理（工作区名就是项目名，可能是中文）
+            wanted = self._pick_store(unquote(self.headers.get("X-Store") or ""))
             ground = resolve_ground_truth()
             result = add_file(ground, name, body)
-            wanted = self._pick_store(self.headers.get("X-Store"))
             self._api({"ok": True, "file": result, "state": self._state(wanted)})
             return
         if path == "/api/inputs/delete":
