@@ -9,7 +9,7 @@
 :root{
   color-scheme:light;
   /* —— 中性面：graphite（不带色相）。温度只由强调色承担 —— */
-  --panel:#ffffff; --amber:#b45309; --bg:#f3f3f1;           /* 画布：纸 */
+  --panel:#ffffff; --amber:#b45309;--bad:#b42318; --bg:#f3f3f1;           /* 画布：纸 */
   --card:#fcfcfb;         /* 卡片：抬一层的纸 */
   --raise:#f9f9f7;        /* 次级面：面板里的分块 */
   /* —— 画布上的数据块：比卡片再亮一档。它铺在最大的那张纸上，
@@ -40,7 +40,7 @@
 
 :root[data-theme="dark"]{
   color-scheme:dark;
-  --panel:#202125; --amber:#f59e0b; --bg:#1b1c20; --card:#232429; --raise:#2c2d32; --sunken:#17181b;
+  --panel:#202125; --amber:#f59e0b;--bad:#f97066; --bg:#1b1c20; --card:#232429; --raise:#2c2d32; --sunken:#17181b;
   --obj:#272830;
   --obj2:#222329;
   --ink:#d9dbe0; --ink-body:#c3c6cc; --ink2:#a4a7ae; --muted:#82858c; --faint:rgba(226,229,235,.28);
@@ -186,7 +186,7 @@ button{font:inherit;color:inherit;background:none;border:0;cursor:pointer}
 .row.on::before{content:"";position:absolute;left:0;top:13px;bottom:13px;width:3px;border-radius:2px;background:var(--accent)}
 
 /* ---------- 底栏：装数据，加厚（越厚越好吃小字） ---------- */
-.bp{right:calc(var(--cw,360px) + 12px);bottom:12px;width:min(860px,calc(100vw - var(--cw,360px) - 300px));height:auto;max-height:236px;display:flex;flex-direction:column;
+.bp{right:calc(var(--cw,360px) + 12px);bottom:12px;width:min(860px,calc(100vw - var(--cw,360px) - 300px));height:auto;max-height:min(46vh,420px);display:flex;flex-direction:column;
   border-radius:16px;overflow:hidden;background:var(--glass-panel)}
 .bp-hd{display:flex;align-items:center;gap:14px;height:38px;padding:0 14px;flex:none;border-bottom:1px solid var(--line2)}
 .bp-path{flex:1;display:flex;align-items:center;gap:7px;overflow:hidden;min-width:0;white-space:nowrap;font:11.5px var(--mono);color:var(--muted)}
@@ -194,6 +194,29 @@ button{font:inherit;color:inherit;background:none;border:0;cursor:pointer}
 .bp-path .sep{color:var(--faint);flex:none}
 .bp-meta{font:11.5px var(--font);font-variant-numeric:tabular-nums;color:var(--ink2);white-space:nowrap;flex:none}
 .bp-bd{flex:1;min-height:0;display:flex;gap:36px;padding:14px 16px;overflow:auto}
+/* 诊断：底栏里的第二个视图。数字是文字，不是胶囊——它只是告诉你「有几条」。 */
+.bp-diag{flex:none;height:24px;padding:0 9px;border-radius:7px;font:11.5px var(--font);
+  color:var(--ink2);display:flex;align-items:center;gap:6px}
+.bp-diag:hover{background:var(--hover);color:var(--ink)}
+.bp-diag.on{background:var(--accent-soft);color:var(--ink)}
+.bp-diag.bad{color:var(--bad)}
+.dg-list{display:flex;flex-direction:column;gap:6px;width:100%;min-width:0}
+.dg-row{display:block;font:12px/1.5 var(--font);color:var(--ink2);
+  border-radius:8px;padding:3px 6px;margin:0 -6px}
+.dg-row.linkable,.dg-row summary{cursor:pointer}
+.dg-row:hover{background:var(--hover)}
+.dg-row summary{display:flex;align-items:flex-start;gap:8px;list-style:none;min-width:0}
+.dg-row summary::-webkit-details-marker{display:none}
+.dg-dot{flex:none;width:5px;height:5px;border-radius:50%;background:var(--faint);margin-top:7px}
+.dg-dot.bad{background:var(--bad)}
+.dg-text{flex:1;min-width:0;word-break:break-word}
+.dg-node{flex:none;font:11px var(--mono);color:var(--faint)}
+.dg-err{max-height:150px;overflow:auto;margin:6px 0 0;padding:8px 10px;border-radius:8px;
+  background:var(--sunken);border:1px solid var(--line2);
+  font:11.5px/1.5 var(--mono);color:var(--ink2);white-space:pre-wrap;word-break:break-word}
+.dg-copy{height:22px;padding:0 8px;margin-top:6px;border-radius:7px;font:11.5px var(--font);
+  color:var(--ink2);border:1px solid var(--line2)}
+.dg-copy:hover{background:var(--hover);color:var(--ink)}
 .bp-ft{flex:none;display:flex;align-items:center;gap:8px;height:46px;padding:0 12px;border-top:1px solid var(--line2);background:var(--sunken)}
   border:1px solid var(--glass-line);background:var(--card);overflow:hidden}
 .pane{min-width:0;display:flex;flex-direction:column}
@@ -408,7 +431,7 @@ button{font:inherit;color:inherit;background:none;border:0;cursor:pointer}
   pointer-events:none;padding:8px 15px;border-radius:10px;background:var(--ink);color:var(--panel);
   font:12px/1.4 var(--font);box-shadow:var(--shadow);transition:opacity .16s,transform .16s;max-width:70vw}
 .toast.on{opacity:1;transform:translate(-50%,0)}
-.toast.bad{background:var(--amber);color:#fff}
+.toast.bad{background:var(--bad);color:#fff}
 
 /* 对话里的系统行：输入变更这类事件，不冒充 agent 说的话 */
 /* 思考块：一行摘要，点开看全文。它不该跟回答一样抢眼 */
@@ -431,38 +454,6 @@ button{font:inherit;color:inherit;background:none;border:0;cursor:pointer}
 .blk.ev .evd{width:5px;height:5px;border-radius:50%;background:var(--amber);flex:none;margin-top:6px}
 .blk.ev .evt{min-width:0;word-break:break-word}
 
-/* ---------- 诊断侧栏：左下角，收起只占一个方块 ---------- */
-/* 为什么不放顶栏右上：那里有主题开关和「发布」，一展开就盖住按钮。 */
-.warn{position:fixed;z-index:60;left:12px;bottom:12px;box-sizing:border-box;
-  border-radius:14px;background:var(--panel);border:1px solid var(--line2);box-shadow:var(--shadow);
-  display:flex;flex-direction:column;font:12px/1.55 var(--font);color:var(--ink)}
-.warn.collapse{width:44px;height:44px;border-radius:13px;overflow:hidden}
-
-/* 收起态：只剩一枚带数量的告警方块 */
-.warn-rail{width:100%;height:100%;display:grid;place-items:center;gap:0;color:var(--amber);
-  border-radius:inherit;cursor:pointer}
-.warn-rail svg{display:block}
-.warn-rail b{font-size:10.5px;font-weight:600;line-height:1;color:var(--amber)}
-.warn-rail:hover{background:var(--hover)}
-.warn:not(.collapse) .warn-rail{display:none}
-
-/* 展开态：从左下角向上浮，宽度可拖 */
-.warn-panel{display:none;width:var(--warn-w,320px);max-height:min(46vh,420px);flex-direction:column}
-.warn:not(.collapse) .warn-panel{display:flex}
-.warn-hd{display:flex;align-items:center;gap:8px;padding:9px 12px 8px;flex:none;
-  border-bottom:1px solid var(--line2)}
-.warn-hd b{font-size:12.5px;font-weight:600;color:var(--amber)}
-.warn-hd span{font-size:11.5px;color:var(--muted);flex:1;min-width:0;
-  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.warn-x{flex:none;height:22px;padding:0 8px;border-radius:7px;font:11.5px/1 var(--font);
-  color:var(--ink2);background:var(--fill)}
-.warn-x:hover{background:var(--hover);color:var(--ink)}
-.warn-list{list-style:none;margin:0;padding:8px 12px 10px;overflow:auto;min-height:0}
-.warn-list li{margin:0 0 7px;overflow-wrap:anywhere;color:var(--ink2)}
-.warn-list li:last-child{margin-bottom:0}
-.warn-grip{position:absolute;top:0;right:0;bottom:0;width:7px;cursor:ew-resize;
-  border-radius:0 14px 14px 0}
-.warn-grip:hover{background:var(--accent-soft)}
 
 /* 对话区顶部的「输入变更」：服务端事件流水的投影 */
 .evsec{display:flex;flex-direction:column;gap:5px;padding:12px 14px 4px}

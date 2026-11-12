@@ -606,6 +606,36 @@
       </div>`;
   }
 
+  /* ---------- 诊断：底栏里的第二个视图 ----------
+     以前它是左下角一块独立浮层，和来源栏共用左边缘，1080p 上必然互相盖住。
+     现在收进底栏：头部一个计数开关，点开把内容区换成告警列表，再点回到选中。
+     失败行带完整 stderr——出错时人会把那段整段复制去问 agent，砍一刀就是
+     让 agent 少看一截现场。 */
+  const ALERTS = Array.isArray(V.alerts) ? V.alerts : [];
+  const failures = ALERTS.filter((item) => item.level === "error").length;
+  /* 底栏现在有两个视图：「选中」和「诊断」。开关就是这一个布尔值。
+     ?diag=1 可以直接打开：截图和排查用得上，与 ?t= / ?focus= 是同一套约定。 */
+  const DIAG = { open: new URLSearchParams(location.search).get("diag") === "1" };
+
+  const alertRow = (item) => {
+    const where = item.node === null || item.node === undefined ? "<span></span>" : `<span class="dg-node">${esc(item.node)}</span>`;
+    const head = `<span class="dg-dot${item.level === "error" ? " bad" : ""}"></span><span class="dg-text">${esc(item.text)}</span>${where}`;
+    if (item.detail === null || item.detail === undefined || item.detail === "") {
+      return `<div class="dg-row${item.node === null || item.node === undefined ? "" : " linkable"}"${item.node === null || item.node === undefined ? "" : ` data-node="${esc(item.node)}"`} title="${item.node === null || item.node === undefined ? "" : "点一下聚焦到这个节点"}">${head}</div>`;
+    }
+    /* 有完整错误文本：默认展开，别让人再点一次才看见哪里坏了 */
+    return `<details class="dg-row bad" open data-node="${esc(item.node ?? "")}"><summary>${head}</summary><pre class="dg-err">${esc(item.detail)}</pre><button class="dg-copy" type="button">复制错误</button></details>`;
+  };
+
+  function alertPane() {
+    if (ALERTS.length === 0) {
+      return '<div class="pane grow"><div class="note">没有告警</div></div>';
+    }
+    const rows = ALERTS.map(alertRow).join("");
+    const tail = failures > 0 ? `<div class="note">${failures} 条失败 · ${ALERTS.length - failures} 条提示</div>` : `<div class="note">${ALERTS.length} 条提示</div>`;
+    return `<div class="pane grow"><div class="dg-list">${rows}</div>${tail}</div>`;
+  }
+
   function paintBar() {
     const f = files[sel.value];
     const selected = selNode.id === null ? null : N.find((n) => n.id === selNode.id) ?? null;
@@ -620,12 +650,23 @@
           ? incidentTables(selected.id).some((t) => chain.tables.has(t))
           : false;
     const goneNote = gone ? '<div class="bp-note">来源已移出输入，重建批次前不可用</div>' : "";
+    const diagButton = ALERTS.length === 0
+      ? ""
+      : `<button class="bp-diag${DIAG.open === true ? " on" : ""}${failures > 0 ? " bad" : ""}" title="${failures > 0 ? `${failures} 条失败` : "没有失败，只有提示"}">诊断 · ${ALERTS.length}</button>`;
+    const detail = DIAG.open === true
+      ? alertPane()
+      : selected !== null && selected.kind !== "file"
+        ? nodePane(selected)
+        : f === undefined
+          ? '<div class="pane grow"><div class="note">点画布上的任意一个节点，或者左边的文件</div></div>'
+          : filePane(f);
     bar.innerHTML = `
       <div class="bp-hd">
         <div class="bp-path">${path}</div>
         <span class="bp-meta">${esc(meta)}</span>
+        ${diagButton}
       <button class="bp-fold" title="收起/展开"><svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 7.5 6 4l3.5 3.5"/></svg></button></div>
-      ${goneNote}<div class="bp-bd">${selected !== null && selected.kind !== "file" ? nodePane(selected) : f === undefined ? '<div class="pane grow"><div class="note">点画布上的任意一个节点，或者左边的文件</div></div>' : filePane(f)}</div>
+      ${DIAG.open === true ? "" : goneNote}<div class="bp-bd">${detail}</div>
       <div class="bp-ft"><button class="btn off" disabled>复制</button></div>`;
   }
 
@@ -742,6 +783,34 @@
   draggable(tray, ".hd");
   draggable(bar, ".bp-hd");
   bar.addEventListener("click", (e) => {
+    if (e.target.closest(".bp-diag") !== null) {
+      DIAG.open = !DIAG.open;
+      paintBar();
+      return;
+    }
+    const copy = e.target.closest(".dg-copy");
+    if (copy !== null) {
+      /* 整段 stderr 原样复制：出错时人要做的是把它粘进对话，不是自己重打 */
+      const pre = copy.parentElement === null ? null : copy.parentElement.querySelector(".dg-err");
+      const text = pre === null ? "" : pre.textContent ?? "";
+      const done = () => note("错误文本已复制");
+      if (navigator.clipboard === undefined || text === "") {
+        note("这个浏览器不让复制，请手动选中", "bad");
+        return;
+      }
+      navigator.clipboard.writeText(text).then(done).catch(() => note("复制失败，请手动选中", "bad"));
+      return;
+    }
+    const row = e.target.closest(".dg-row");
+    if (row !== null) {
+      const id = row.getAttribute("data-node") ?? "";
+      const node = N.find((n) => n.id === id);
+      if (node !== undefined) {
+        DIAG.open = false;
+        selectNode(node);
+      }
+      return;
+    }
     if (e.target.closest(".bp-fold") === null) return;
     bar.classList.toggle("folded");
   });
@@ -783,6 +852,17 @@ if (location.search.includes("selftest")) {
     out.push(`trayFolded=${tray.classList.contains("collapsed")}`);
     tray.querySelector(".hd .fold").dispatchEvent(new MouseEvent("click", { bubbles: true }));
     out.push(`trayUnfolded=${!tray.classList.contains("collapsed")}`);
+
+    /* 诊断是底栏的第二个视图：点开要有行，再点要回到选中 */
+    const diagBtn = bar.querySelector(".bp-diag");
+    if (diagBtn === null) {
+      out.push("diag=skip(no-alerts)");
+    } else {
+      diagBtn.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      out.push(`diagOpen=${bar.querySelectorAll(".dg-row").length}`);
+      bar.querySelector(".bp-diag").dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      out.push(`diagClosed=${bar.querySelectorAll(".dg-row").length === 0}`);
+    }
 
     bar.querySelector(".bp-fold").dispatchEvent(new MouseEvent("click", { bubbles: true }));
     out.push(`folded=${bar.classList.contains("folded")}`);
@@ -1163,71 +1243,6 @@ if (location.search.includes("selftest")) {
     view.y = q.get("y") === null ? 0 : Number(q.get("y"));
     apply();
   }
-  /* ---------- 诊断侧栏：左下角，可收起、可拖宽，状态记在浏览器里 ---------- */
-  (() => {
-    const box = document.getElementById("book-warnings");
-    if (box === null) return;
-    const KEY = "vibe-book-warn";
-    const read = () => {
-      try { return JSON.parse(localStorage.getItem(KEY) || "{}") || {}; } catch { return {}; }
-    };
-    const save = (state) => {
-      try { localStorage.setItem(KEY, JSON.stringify(state)); } catch { /* 隐私模式：记不住就算了 */ }
-    };
-    // ?warn=open / ?warn=shut 可以压过记在浏览器里的状态：排查和截图都用得上，
-    // 与页面已有的 ?t= / ?focus= / ?z= 是同一套约定。
-    const forced = q.get("warn");
-    const stored = forced === "open" ? { ...read(), open: true } : forced === "shut" ? { ...read(), open: false } : read();
-    const apply = (state) => {
-      box.classList.toggle("collapse", state.open !== true);
-      const width = Math.min(560, Math.max(260, Number(state.width) || 320));
-      box.style.setProperty("--warn-w", `${width}px`);
-    };
-    apply(stored);
-
-    const rail = box.querySelector(".warn-rail");
-    if (rail !== null) {
-      rail.addEventListener("click", () => {
-        apply({ ...read(), open: true });
-        save({ ...read(), open: true });
-      });
-    }
-    const close = box.querySelector(".warn-x");
-    if (close !== null) {
-      close.addEventListener("click", () => {
-        apply({ ...read(), open: false });
-        save({ ...read(), open: false });
-      });
-    }
-    document.addEventListener("keydown", (e) => {
-      if (e.key === "Escape" && !box.classList.contains("collapse")) {
-        apply({ ...read(), open: false });
-        save({ ...read(), open: false });
-      }
-    });
-
-    /* 右边缘拖动改宽度：只在展开时有效，松手时记一次 */
-    const grip = box.querySelector(".warn-grip");
-    if (grip !== null) {
-      grip.addEventListener("pointerdown", (event) => {
-        event.preventDefault();
-        const startX = event.clientX;
-        const startW = box.getBoundingClientRect().width;
-        grip.setPointerCapture(event.pointerId);
-        const move = (e) => {
-          const width = Math.min(560, Math.max(260, startW + (e.clientX - startX)));
-          box.style.setProperty("--warn-w", `${width}px`);
-        };
-        const up = () => {
-          grip.removeEventListener("pointermove", move);
-          grip.removeEventListener("pointerup", up);
-          save({ ...read(), open: true, width: box.getBoundingClientRect().width });
-        };
-        grip.addEventListener("pointermove", move);
-        grip.addEventListener("pointerup", up);
-      });
-    }
-  })();
 
   paintTray();
   paintStale();

@@ -211,23 +211,30 @@ def test_render_book_single_file_mode_has_no_fonts_or_back_link() -> None:
     assert "data-home" not in html
 
 
-def test_render_book_puts_diagnostics_in_a_bottom_left_panel() -> None:
+def test_render_book_hands_alerts_to_the_bottom_bar() -> None:
+    """诊断现在归底栏：数据随 book-data 下发，页面不再产出独立浮层。"""
     view = _book_view()
     view["warnings"] = ["表 meta 追不到原始文件", "表 quarantine 追不到原始文件"]
+    view["alerts"] = [
+        {"level": "notice", "text": "表 meta 追不到原始文件", "node": None, "runId": None, "detail": None},
+        {"level": "error", "text": "运行 ab 失败", "node": "build_totals", "runId": "ab", "detail": "KeyError"},
+    ]
     html = render_book(view)
 
-    assert 'id="book-warnings"' in html
-    # 收起态只占一个方块：原来钉在顶栏右上，会盖住主题开关
-    assert 'class="warn collapse"' in html
-    assert 'data-count="2"' in html
+    # 左下角那块浮层必须消失：它和来源栏抢同一个左边缘
+    assert 'id="book-warnings"' not in html
+    assert '<aside id="book-warnings"' not in html
+    # 数据本身还在，只是改由底栏渲染
+    assert '"alerts"' in html
     assert "表 meta 追不到原始文件" in html
-    # 位置与尺寸交给 app.css 统一管，HTML 里不再留内联定位
-    assert "position:fixed;top:12px" not in html
 
 
-def test_render_book_without_warnings_has_no_panel() -> None:
-    # 没有诊断时不留一个空方块
-    assert 'id="book-warnings"' not in render_book(_book_view())
+def test_render_book_without_alerts_leaves_the_bar_alone() -> None:
+    """没有告警时下发的数据里就没有 alerts；开关由 app.js 按数据决定。"""
+    html = render_book(_book_view())
+
+    assert 'id="book-warnings"' not in html
+    assert '"alerts"' not in html
 
 
 def test_render_empty_book_says_what_to_do_next() -> None:

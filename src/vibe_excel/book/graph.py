@@ -4,6 +4,7 @@ run.json 是运行期写下的权威轨迹（trace），本模块只把它塑形
 数据只读；没有 graph.nodes 时返回 None，缺失的执行轮次字段保持 None/空值。
 """
 
+from ..flow import FlowWarning, format_flow_warning
 from ..util import VibeError
 from ._values import as_list, as_number, as_object, as_text, first_round, strings
 from .types import (
@@ -92,6 +93,34 @@ def _materialize(value: object) -> list[MaterializeView]:
     return entries
 
 
+def _graph_warnings(graph: dict[str, object]) -> list[str]:
+    """把 run.json 里的告警摊成一行人话。
+
+    run.json 存的是结构化对象 ``{code, message, line}``，而字符串收窄只保留 str
+    ——以前这些对象被整段丢掉，页面上一条都看不到。这里两种形态都接：对象用
+    现成的 ``format_flow_warning`` 拼成「入口:行号 [代码] 消息」。
+    """
+    entry = as_text(graph.get("entry"))
+    rendered: list[str] = []
+    for raw in as_list(graph.get("warnings")):
+        if isinstance(raw, str):
+            if raw != "":
+                rendered.append(raw)
+            continue
+        item = as_object(raw)
+        code = as_text(item.get("code"))
+        message = as_text(item.get("message"))
+        if code is None or message is None:
+            continue
+        line = item.get("line")
+        warning = FlowWarning(
+            code=code,
+            message=message,
+            line=line if isinstance(line, int) else None,
+        )
+        rendered.append(format_flow_warning(entry, warning))
+    return rendered
+
 def build_graph(
     input: BuildGraphInput | None = None,
     *,
@@ -148,7 +177,7 @@ def build_graph(
         "outputs": outputs or [table for node in nodes for table in node["writes"]],
         "tables": tables if tables is not None else {},
         "sample": sample,
-        "warnings": strings(graph.get("warnings")),
+        "warnings": _graph_warnings(graph),
     }
 
 

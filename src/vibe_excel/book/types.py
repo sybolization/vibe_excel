@@ -359,6 +359,23 @@ class BookView(TypedDict):
     # 默认展开的对话 id；关联不到作者记录时取最近一条。
     focusEpisode: str | None
     warnings: NotRequired[list[str]]
+    # 底栏「诊断」的行：构建期告警、本次运行的失败、物化阶段的提示都在这里。
+    alerts: NotRequired[list["AlertView"]]
+
+
+class AlertView(TypedDict):
+    """底栏「诊断」里的一行。
+
+    level 只有两级：notice（提示，灰点）和 error（失败，红点）。node 有值时
+    这一行可点，点了聚焦到那个节点；detail 是原始错误文本，给「复制」和
+    「问 agent」用——出错时不该让人自己去终端里捞 stderr 再粘进对话。
+    """
+
+    level: str
+    text: str
+    node: str | None
+    runId: str | None
+    detail: str | None
 
 
 class SourceRef(TypedDict):

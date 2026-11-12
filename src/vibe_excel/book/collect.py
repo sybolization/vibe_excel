@@ -20,6 +20,7 @@ from .graph import build_graph
 from .inputs import build_inputs
 from .transcript import parse_conversation, parse_transcript
 from .types import (
+    AlertView,
     BatchFile,
     BatchView,
     BookView,
@@ -712,6 +713,78 @@ def collect_book(
         "conversations": conversations,
         "focusEpisode": focus_episode["id"] if focus_episode is not None else None,
         "warnings": warnings,
+        "alerts": _alerts(warnings, focus_doc, focus.id if focus is not None else None),
     }
+
+
+def _alerts(
+    warnings: list[str], run_doc: dict[str, object], run_id: str | None
+) -> list[AlertView]:
+    """把「哪里不对劲」汇成一份两级的列表：提示（灰点）和失败（红点）。
+
+    三块来源合到这里：采集降级记下的 warnings（既有）、run.json 里每个节点的
+    exitCode/stderr（一直存着、页面从没读过）、双跑/物化阶段的 warnings。
+    失败行带上完整的 stderr——出错时人会把它整段复制去问 agent，砍一刀就等于
+    让 agent 少看一截现场。运行时那边本来就有 truncated 标记，真被截过的是它。
+    """
+    alerts: list[AlertView] = []
+    seen: set[tuple[str, str]] = set()
+
+    def add(level: str, text: str, *, node: str | None = None, detail: str | None = None) -> None:
+        key = (level, text)
+        if text == "" or key in seen:
+            return
+        seen.add(key)
+        alerts.append(
+            {
+                "level": level,
+                "text": text,
+                "node": node,
+                "runId": run_id,
+                "detail": detail,
+            }
+        )
+
+    for warning in warnings:
+        add("notice", warning)
+
+    short = (run_id or "")[:8]
+    rounds = as_object(run_doc.get("rounds"))
+    for name in ("a", "b"):
+        round_doc = as_object(rounds.get(name))
+        for raw in as_list(round_doc.get("nodes")):
+            node = as_object(raw)
+            identifier = as_text(node.get("id")) or ""
+            code = node.get("exitCode")
+            failed = (isinstance(code, int) and code != 0) or node.get("timedOut") is True
+            if node.get("cancelled") is True:
+                add("error", f"运行 {short}：节点 {identifier} 被取消", node=identifier)
+            elif node.get("timedOut") is True:
+                add("error", f"运行 {short}：节点 {identifier} 超时", node=identifier)
+            elif failed:
+                add(
+                    "error",
+                    f"运行 {short}：节点 {identifier} 退出码 {code}",
+                    node=identifier,
+                    detail=as_text(node.get("stderr")),
+                )
+        materialize = as_object(round_doc.get("materialize"))
+        materialize_code = materialize.get("exitCode")
+        if isinstance(materialize_code, int) and materialize_code != 0:
+            add(
+                "error",
+                f"运行 {short}：物化退出码 {materialize_code}",
+                detail=as_text(materialize.get("stderr")),
+            )
+        for warning in strings(round_doc.get("warnings")):
+            add("notice", warning)
+
+    status = as_text(run_doc.get("status"))
+    if status == "failed" and not any(item["level"] == "error" for item in alerts):
+        # run.json 说失败了，但没定位到具体节点（老记录没有 exitCode）——如实说不知道。
+        add("error", f"运行 {short} 失败，记录里没有节点级的退出码")
+    # 失败排前面：打开面板第一眼要先看到「哪里真的坏了」，提示按原顺序跟在后面。
+    alerts.sort(key=lambda item: 0 if item["level"] == "error" else 1)
+    return alerts
 
 
