@@ -115,3 +115,11 @@ def test_alerts_do_not_repeat_and_keep_the_whole_stderr() -> None:
     assert texts.count("运行 r1：节点 n 退出码 1") == 1, texts
     # stderr 原样保留：人要能整段复制给 agent
     assert alerts[0]["detail"] == long_error
+
+def test_a_brand_new_project_has_no_alerts() -> None:
+    """没有运行、没有文件、没有库：这是空状态，不是三条告警。"""
+    from vibe_excel.book.collect import _alerts
+
+    assert _alerts(["没有可展示的流程运行；其他账页仍可浏览"], {}, None, untouched=True) == []
+    # 只是提到「没运行」还不够：一旦有文件或运行，同样的 warning 要照常显示
+    assert _alerts(["没有可展示的流程运行；其他账页仍可浏览"], {}, None, untouched=False) != []

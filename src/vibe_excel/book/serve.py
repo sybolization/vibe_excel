@@ -37,7 +37,7 @@ from .inputs_edit import (
     undo_removal,
 )
 from .projects import collect_projects, page_name
-from .projects_edit import archive_project, create_workspace
+from .projects_edit import archive_project, create_workspace, start_session
 from .render import _ASSETS, render_book, render_empty_book
 from .types import ProjectSummary
 
@@ -260,11 +260,23 @@ class _Handler(BaseHTTPRequestHandler):
                 if page_name(str(project["id"])) != name:
                     continue
                 if project["activeSessionId"] is None:
-                    # 刚建好的项目还没有会话，collect_book 会直接报错。
-                    # 与其回 500，不如照实说它还没跑过、下一步做什么。
-                    return render_empty_book(
-                        program=str(project["name"]), fonts="fonts/", home="index.html"
-                    )
+                    # 没有会话就没有草稿分支和工作目录：导入、对话、运行都没有落脚点，
+                    # 这一页原本只能是一张说明书。补一个会话，让它就是那张空白画布。
+                    # 新建路径已经会开会话，这里兜的是早于那次改动建出来的项目。
+                    try:
+                        start_session(store, str(project["id"]))
+                        project = next(
+                            (
+                                item
+                                for item in collect_projects(store)
+                                if str(item["id"]) == str(project["id"])
+                            ),
+                            project,
+                        )
+                    except Exception:  # noqa: BLE001 - 补不上就退回说明书，不再往上报
+                        return render_empty_book(
+                            program=str(project["name"]), fonts="fonts/", home="index.html"
+                        )
                 view = collect_book(
                     store,
                     program_id=str(project["id"]),

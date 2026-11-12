@@ -713,12 +713,21 @@ def collect_book(
         "conversations": conversations,
         "focusEpisode": focus_episode["id"] if focus_episode is not None else None,
         "warnings": warnings,
-        "alerts": _alerts(warnings, focus_doc, focus.id if focus is not None else None),
+        "alerts": _alerts(
+            warnings,
+            focus_doc,
+            focus.id if focus is not None else None,
+            untouched=graph is None and not runs and not (inputs or {}).get("files"),
+        ),
     }
 
 
 def _alerts(
-    warnings: list[str], run_doc: dict[str, object], run_id: str | None
+    warnings: list[str],
+    run_doc: dict[str, object],
+    run_id: str | None,
+    *,
+    untouched: bool = False,
 ) -> list[AlertView]:
     """把「哪里不对劲」汇成一份两级的列表：提示（灰点）和失败（红点）。
 
@@ -727,6 +736,10 @@ def _alerts(
     失败行带上完整的 stderr——出错时人会把它整段复制去问 agent，砍一刀就等于
     让 agent 少看一截现场。运行时那边本来就有 truncated 标记，真被截过的是它。
     """
+    if untouched:
+        # 刚建好的项目：没有运行、没有文件、没有库，这三样都是正常的空状态。
+        # 把它们报成告警，等于一进门就告诉用户「有 3 个问题」。
+        return []
     alerts: list[AlertView] = []
     seen: set[tuple[str, str]] = set()
 

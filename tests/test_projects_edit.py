@@ -286,9 +286,9 @@ def test_create_project_adds_an_empty_project_to_the_index(tmp_path: Path) -> No
     assert (root / "program-repos" / program.id).is_dir()
     projects = collect_projects(root)
     assert [(item["id"], item["name"]) for item in projects] == [(program.id, "销售分析")]
-    # 新建的项目是空的：没有会话、没有运行，索引要如实这么显示
-    assert projects[0]["sessions"] == []
-    assert projects[0]["activeSessionId"] is None
+    # 项目一建好就有会话（否则页面只能停在说明书上），但没有运行
+    assert len(projects[0]["sessions"]) == 1
+    assert projects[0]["activeSessionId"] is not None
     assert projects[0]["runCount"] == 0
 
 
@@ -366,8 +366,10 @@ def test_create_workspace_makes_dir_and_program(tmp_path: Path) -> None:
     assert workspace == root / "季度分析"
     assert (workspace / "control.db").is_file()
     assert program.name == "季度分析"
-    # 空项目还没有会话：页面会走「这个项目还没跑过」
-    assert [item["id"] for item in collect_projects(workspace)] == [str(program.id)]
+    # 新建即开会话：页面直接就是那张空白画布，不用先跑 vibectl setup
+    projects = collect_projects(workspace)
+    assert [item["id"] for item in projects] == [str(program.id)]
+    assert projects[0]["activeSessionId"] is not None
 
 
 def test_create_workspace_rejects_duplicate_and_rolls_back(tmp_path: Path) -> None:

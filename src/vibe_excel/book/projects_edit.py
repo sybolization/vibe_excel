@@ -1,7 +1,9 @@
 """项目索引上的写操作：新建与归档。
 
-**新建**只写两样东西：``programs`` 表里一行记录，以及 ``program-repos/<id>`` 下的
-空仓库；不碰会话、输入与运行。新项目停在「还没开过会话」的状态，页面上如实说明。
+**新建**写三样东西：``programs`` 表里一行记录、``program-repos/<id>`` 下的空仓库，
+以及第一个会话（草稿分支 + 工作目录）。没有会话的项目在页面上只能是一张说明书——
+导入、对话、运行都没有落脚点，所以建项目时就把它开到「可以干活」的状态。
+输入批次与运行仍然留白：那是用户导入之后才有的事。
 名字在落盘前就校验完（空、路径字符、长度、同 store 重名），非法名字不会留下半个目录。
 
 **归档**与 ``inputs_edit`` 同一套约定：
@@ -27,7 +29,8 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
-from ..session import Program, SessionStore
+from ..runtime import ensure_workspace
+from ..session import Program, ProgramId, SessionStore
 from ..util import VibeError, now, readonly_database
 
 __all__ = [
@@ -40,6 +43,8 @@ __all__ = [
     "TABLE_NAME",
     "archive_project",
     "create_project",
+    "create_workspace",
+    "start_session",
 ]
 
 ARCHIVE_ROOT = ".archive"
@@ -131,7 +136,10 @@ def create_workspace(root: str | Path, name: str) -> tuple[Path, Program]:
         raise VibeError(f"建不了工作区目录 {target}：{error}") from error
     try:
         with SessionStore.open(target) as db:
-            return target, db.create_program(clean)
+            program = db.create_program(clean)
+            session = db.create_session(program.id)
+        ensure_workspace(target, session.id)
+        return target, program
     except Exception:
         shutil.rmtree(target, ignore_errors=True)
         raise
@@ -150,7 +158,27 @@ def create_project(store: str | Path, name: str) -> Program:
         suffix = "，它已归档" if archived else ""
         raise VibeError(f"这个 store 里已有同名项目「{existing}」（不区分大小写{suffix}）")
     with SessionStore.open(root) as db:
-        return db.create_program(clean)
+        program = db.create_program(clean)
+        session = db.create_session(program.id)
+    ensure_workspace(root, session.id)
+    return program
+
+
+def start_session(store: str | Path, program_id: str) -> str:
+    """给一个还没有会话的项目开第一个会话（已有活跃会话就复用，幂等）。
+
+    早于「新建即开会话」建出来的项目没有会话：这一页原本只能显示一句
+    「还没跑过，去跑 vibectl setup」，而页面里根本没有那个按钮。
+    """
+    root = Path(store).resolve()
+    with SessionStore.open(root) as db:
+        program = db.get_program(ProgramId(program_id))
+        if program is None:
+            raise VibeError(f"程序不存在: {program_id}")
+        active = [item for item in db.list_sessions(program.id) if item.status == "active"]
+        session = active[0] if active else db.create_session(program.id)
+    ensure_workspace(root, session.id)
+    return str(session.id)
 
 
 @dataclass(frozen=True)

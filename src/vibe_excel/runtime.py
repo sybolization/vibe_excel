@@ -69,7 +69,15 @@ def ensure_workspace(store_root: str | Path, session_id: SessionId) -> Workspace
     """创建工作区骨架目录（幂等）。"""
     paths = workspace_paths(store_root, session_id)
     for path in (
-        paths.root, paths.work, paths.pi_sessions, paths.agent, paths.runs, paths.data_revisions
+        paths.root,
+        paths.work,
+        # 导入接口把文件写进 work/inputs：骨架里少了它，新建的项目一打开就报
+        # 「读不到输入批次目录」，而那本该是最正常的空状态。
+        paths.work / "inputs",
+        paths.pi_sessions,
+        paths.agent,
+        paths.runs,
+        paths.data_revisions,
     ):
         path.mkdir(parents=True, exist_ok=True)
     return paths
